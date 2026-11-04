@@ -45,10 +45,12 @@ def test_no_paid_tools_listed(manifest):
         assert not (listed & PAID_TOOLS), f"{stage['name']} lists paid tools"
 
 
-def test_visuals_has_keyless_source_and_pexels(manifest):
-    tools = set(_stage(manifest, "visuals")["tools_available"])
-    assert tools & {"nasa", "archive_org"}
-    assert "pexels_video" in tools
+def test_visuals_works_without_api_keys(manifest):
+    """direct_clip_search reaches keyless adapters (nasa, archive_org), so a
+    missing Pexels/Pixabay key can never strand the stage."""
+    stage = _stage(manifest, "visuals")
+    assert "direct_clip_search" in stage["required_tools"]
+    assert not {"pexels_video", "pixabay_video"} & set(stage["required_tools"])
 
 
 def test_voice_stage_uses_piper(manifest):

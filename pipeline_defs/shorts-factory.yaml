@@ -83,17 +83,15 @@ stages:
     produces:
       - scene_plan
     required_tools:
-      - pexels_video
+      - direct_clip_search
     optional_tools:
+      - pexels_video
       - pixabay_video
-      - nasa
-      - archive_org
       - clip_search
     tools_available:
+      - direct_clip_search
       - pexels_video
       - pixabay_video
-      - nasa
-      - archive_org
       - clip_search
     checkpoint_required: true
     human_approval_default: false
@@ -103,7 +101,7 @@ stages:
       - Every clip has source, licence and URL logged
     success_criteria:
       - Schema-valid scene_plan artifact
-      - Missing API keys fall back to keyless sources (nasa, archive_org)
+      - direct_clip_search is called with sources that include the keyless nasa and archive_org adapters
 
   - name: voice_captions
     skill: pipelines/shorts-factory/voice-captions-director
