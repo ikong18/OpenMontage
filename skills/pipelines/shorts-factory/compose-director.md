@@ -16,9 +16,13 @@ Render every video to a finished 1080x1920 MP4.
 
 ## Process
 
+### 0. Runtime
+
+Read `render_runtime` from the approved `render_runtime_selection` decision (locked to `"remotion"` for this pipeline). If a run arrives with `render_runtime == "hyperframes"`, stop and re-open the `idea` stage so the owner can be shown the constraint: HyperFrames lacks word-level caption burn parity here.
+
 ### 1. Render
 
-Use `video_compose` at 1080x1920 with the `shorts-captions` playbook. Output to `renders/<id>.mp4` inside the project directory. Follow `AGENT_GUIDE.md` on presenting available composition runtimes before locking one; for this pipeline recommend Remotion for its caption support.
+Use `video_compose` at 1080x1920 with the `shorts-captions` playbook. Output to `renders/<id>.mp4` inside the project directory. The runtime was already presented and locked at the `idea` gate.
 
 ### 2. Verify each render
 

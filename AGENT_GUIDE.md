@@ -249,6 +249,7 @@ If the folder has tracks, the proposal and asset stages should present them as o
 | `talking-head` | Footage-led speaker videos | beta |
 | `screen-demo` | Screen recordings and walkthroughs | production |
 | `clip-factory` | Many clips from one long source | beta |
+| `shorts-factory` | Batch of vertical facts Shorts, free tools only | beta |
 | `podcast-repurpose` | Podcast highlights and derivatives | beta |
 | `cinematic` | Trailer, teaser, and mood-led edits | production |
 | `animation` | Motion-graphics and animation-first videos | production |

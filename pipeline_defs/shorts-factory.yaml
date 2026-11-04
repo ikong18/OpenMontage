@@ -26,7 +26,7 @@ extensions:
 
 required_skills:
   - pipelines/shorts-factory/executive-producer
-  - pipelines/shorts-factory/topics-director
+  - pipelines/shorts-factory/idea-director
   - pipelines/shorts-factory/script-director
   - pipelines/shorts-factory/visuals-director
   - pipelines/shorts-factory/voice-captions-director
@@ -43,8 +43,8 @@ compatible_playbooks:
   custom_allowed: true
 
 stages:
-  - name: topics
-    skill: pipelines/shorts-factory/topics-director
+  - name: idea
+    skill: pipelines/shorts-factory/idea-director
     produces:
       - brief
       - decision_log
@@ -57,7 +57,7 @@ stages:
       - Hook types are varied across the batch
     success_criteria:
       - Schema-valid brief artifact
-      - Owner approved the topic list
+      - Owner approved the topic list and the locked render_runtime
 
   - name: script
     skill: pipelines/shorts-factory/script-director

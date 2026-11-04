@@ -48,8 +48,8 @@ def test_script_director_mentions_hook_types_and_sources():
         assert needle in text
 
 
-def test_topics_director_lists_the_fixed_hook_types():
-    text = _read("topics-director")
+def test_idea_director_lists_the_fixed_hook_types():
+    text = _read("idea-director")
     for hook in ("question", "shocking_stat", "myth_bust", "comparison", "countdown"):
         assert hook in text
 
@@ -66,5 +66,16 @@ def test_review_queue_runs_audit():
 
 def test_executive_producer_states_the_two_gates_and_zero_cost():
     text = _read("executive-producer")
-    assert "topics" in text and "review_queue" in text
+    assert "idea" in text and "review_queue" in text
     assert "$0" in text
+
+
+def test_idea_director_presents_both_runtimes_and_records_decision():
+    text = _read("idea-director")
+    for needle in ("render_runtime", "hyperframes", "render_runtime_selection", "remotion"):
+        assert needle in text
+
+
+def test_compose_director_routes_by_runtime():
+    text = _read("compose-director")
+    assert "render_runtime" in text and "HyperFrames" in text

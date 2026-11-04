@@ -14,9 +14,9 @@
 
 - Aspect/size: 1080x1920 (9:16). Duration: strictly under 60 s (target 25-45 s).
 - Cost: $0. Manifest `budget_default_usd: 0.00`; no paid provider may appear in any stage's `tools_available`.
-- Approval gates: `human_approval_default: true` ONLY on `topics`, `review_queue` (and `publish` is `false` in phase 1; phase 2 sets it `true`).
+- Approval gates: `human_approval_default: true` ONLY on `idea`, `review_queue` (and `publish` is `false` in phase 1; phase 2 sets it `true`).
 - No existing file's behavior changes. New files only, except index/registry lines in `skills/INDEX.md`, `AGENT_GUIDE.md`, `docs/ARCHITECTURE.md`.
-- Stage order: `topics`, `script`, `visuals`, `voice_captions`, `compose`, `review_queue`, `publish`.
+- Stage order: `idea`, `script`, `visuals`, `voice_captions`, `compose`, `review_queue`, `publish`.
 - Uploads (phase 2) are `private` or scheduled only. The owner performs Google OAuth.
 - All file I/O uses `encoding="utf-8"` (repo contract: `tests/contracts/test_utf8_file_io.py`).
 
@@ -116,7 +116,7 @@
 
 - [ ] **Step 1: Write failing tests** in `tests/pipelines/test_shorts_factory_manifest.py`:
   - `test_manifest_loads_and_stage_order`: `[s["name"] for s in load_pipeline("shorts-factory")["stages"]] == ["topics","script","visuals","voice_captions","compose","review_queue","publish"]`.
-  - `test_only_topics_and_review_queue_gate`: `_stage_requires_approval("shorts-factory", n)` is `True` for `topics` and `review_queue`, `False` for the other five.
+  - `test_only_topics_and_review_queue_gate`: `_stage_requires_approval("shorts-factory", n)` is `True` for `idea` and `review_queue`, `False` for the other five.
   - `test_budget_is_zero`: `manifest["orchestration"]["budget_default_usd"] == 0.0`.
   - `test_no_paid_tools_listed`: no tool name in any stage's `tools_available` appears in `{"elevenlabs_tts","openai_tts","google_tts","azure_tts","heygen_video","kling_video","wan_video","image_selector","video_selector"}`.
   - `test_visuals_has_keyless_source`: `visuals` stage `tools_available` contains `nasa` or `archive_org`, and contains `pexels_video`.
@@ -125,7 +125,7 @@
   - `test_required_skills_files_exist`: every entry of `required_skills` resolves to `skills/<entry>.md`.
 - [ ] **Step 2: Run** `.venv/Scripts/python.exe -m pytest tests/pipelines/test_shorts_factory_manifest.py -v`. Expected: FAIL.
 - [ ] **Step 3: Create `styles/shorts-captions.yaml`.** Copy the structure of `styles/clean-professional.yaml` (all seven required top-level keys). Values: bold sans font (Inter 800), high-contrast white text with dark outline, caption block kept inside the vertical safe zone (bottom margin >= 280 px, side margins >= 60 px), pace `fast`, cut every 2-4 s.
-- [ ] **Step 4: Create `pipeline_defs/shorts-factory.yaml`.** Model on `pipeline_defs/clip-factory.yaml`: `category: custom`, `stability: beta`, `orchestration.mode: executive-producer`, skill `pipelines/shorts-factory/executive-producer`, `budget_default_usd: 0.00`, `compatible_playbooks.recommended: [shorts-captions]`, `required_skills` listing the 8 skills + `meta/reviewer` + `meta/checkpoint-protocol`. Stage tools: `visuals` -> `pexels_video, pixabay_video, nasa, archive_org, clip_search`; `voice_captions` -> `piper_tts, subtitle_gen, audio_mixer`; `compose` -> `video_compose, audio_mixer`. Artifacts: `topics`->`brief`; `script`->`script`; `visuals`->`scene_plan`; `voice_captions`->`asset_manifest`; `compose`->`render_report`,`final_review`; `review_queue`->`decision_log`; `publish`->`publish_log`. Set `human_approval_default` per Global Constraints and `max_wall_time_minutes: 60`.
+- [ ] **Step 4: Create `pipeline_defs/shorts-factory.yaml`.** Model on `pipeline_defs/clip-factory.yaml`: `category: custom`, `stability: beta`, `orchestration.mode: executive-producer`, skill `pipelines/shorts-factory/executive-producer`, `budget_default_usd: 0.00`, `compatible_playbooks.recommended: [shorts-captions]`, `required_skills` listing the 8 skills + `meta/reviewer` + `meta/checkpoint-protocol`. Stage tools: `visuals` -> `pexels_video, pixabay_video, nasa, archive_org, clip_search`; `voice_captions` -> `piper_tts, subtitle_gen, audio_mixer`; `compose` -> `video_compose, audio_mixer`. Artifacts: `idea`->`brief`; `script`->`script`; `visuals`->`scene_plan`; `voice_captions`->`asset_manifest`; `compose`->`render_report`,`final_review`; `review_queue`->`decision_log`; `publish`->`publish_log`. Set `human_approval_default` per Global Constraints and `max_wall_time_minutes: 60`.
 - [ ] **Step 5: Run the new tests plus** `.venv/Scripts/python.exe -m pytest tests/pipelines tests/contracts/test_pipeline_catalog.py tests/styles -v`. Expected: PASS (the catalog tests iterate every manifest and playbook, so they now cover the new ones).
 - [ ] **Step 6: Commit** `feat(shorts): add shorts-factory manifest and captions playbook`.
 
@@ -134,7 +134,7 @@
 ### Task 4: Director skills
 
 **Files:**
-- Create: `skills/pipelines/shorts-factory/{executive-producer,topics-director,script-director,visuals-director,voice-captions-director,compose-director,review-queue-director,publish-director}.md`
+- Create: `skills/pipelines/shorts-factory/{executive-producer,idea-director,script-director,visuals-director,voice-captions-director,compose-director,review-queue-director,publish-director}.md`
 - Test: `tests/contracts/test_shorts_factory_skills.py`
 
 **Interfaces:**
@@ -149,7 +149,7 @@
 - [ ] **Step 2: Run** `.venv/Scripts/python.exe -m pytest tests/contracts/test_shorts_factory_skills.py -v`. Expected: FAIL.
 - [ ] **Step 3: Write the eight skills**, each following the section layout of the matching `skills/pipelines/clip-factory/*.md` file (When to Use, Prerequisites, Process, Quality checks, Common pitfalls). Required content:
   - **executive-producer:** batch state (N videos, per-video status), the stage order, only two human gates, zero-cost rule, "announce provider before generating" contract, per-video failure handling (retry up to 3, then drop the video from the batch and say so).
-  - **topics-director:** propose or accept N topics; each with angle, intended `hook_type` from a fixed set (`question`, `shocking_stat`, `myth_bust`, `comparison`, `countdown`), and a sourced fact; duplicates against previous batches are rejected; the one-approval gate.
+  - **idea-director:** propose or accept N topics; each with angle, intended `hook_type` from a fixed set (`question`, `shocking_stat`, `myth_bust`, `comparison`, `countdown`), and a sourced fact; duplicates against previous batches are rejected; the one-approval gate.
   - **script-director:** 25-45 s, hook in the first 2 s, one fact, loop/payoff ending; fills `claims` with sources; writes `artifacts/shorts_batch.json` entries (`id`, `topic`, `hook_type`, `hook_text`, `claims`).
   - **visuals-director:** choose clips per beat from `pexels_video`, `pixabay_video`, `nasa`, `archive_org`; if a key is missing, fall back to keyless sources and say so; record `clips` with `clip_id`, `source`, `license`, `url`; no `clip_id` reused in the batch.
   - **voice-captions-director:** `piper_tts` narration, `subtitle_gen` word-level captions, loudness consistent across the batch.

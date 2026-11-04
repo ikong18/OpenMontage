@@ -22,14 +22,18 @@ vertical "did you know" fact Shorts, with automation, at **$0 generation cost** 
 | Approach | New `shorts-factory` pipeline alongside existing ones (nothing existing modified) |
 | Upload | Phase 2. Phase 1 exports files plus title/description/tags |
 
+## Naming note
+
+The first stage is named `idea` (not `topics`): the repo contract in `tests/contracts/test_runtime_presentation_contract.py` requires an `idea` or `proposal` planning stage that presents the render-runtime choice. That choice (Remotion locked, HyperFrames rejected for caption-burn parity) is made at the same single approval as the topic list.
+
 ## Non-goals
 
 - AI video or music generation (paid/GPU), scheduler daemon, other niches, rewriting existing pipelines.
 
 ## Components
 
-1. `pipeline_defs/shorts-factory.yaml` — manifest. Stages: `topics`, `script`, `visuals`,
-   `voice_captions`, `compose`, `review_queue`, `publish`. Only `topics` and `review_queue`
+1. `pipeline_defs/shorts-factory.yaml` — manifest. Stages: `idea`, `script`, `visuals`,
+   `voice_captions`, `compose`, `review_queue`, `publish`. Only `idea` and `review_queue`
    (and `publish` in phase 2) have `human_approval_default: true`. Budget default 0.00 USD.
 2. `skills/pipelines/shorts-factory/*.md` — executive-producer plus one director skill per
    stage, modelled on `skills/pipelines/clip-factory/` and `skills/pipelines/explainer/`.
@@ -40,7 +44,7 @@ vertical "did you know" fact Shorts, with automation, at **$0 generation cost** 
 
 ## Flow
 
-1. **Topics** (approval): list of N topics, each with an angle and an intended hook.
+1. **Idea / topics** (approval): list of N topics, each with an angle and an intended hook.
 2. **Per video, no stops**: script (hook in first 2 s, one fact, loop/payoff ending) ->
    fact-check against cited sources -> free footage selection (Pexels, Pixabay, NASA,
    Archive.org) -> Piper narration -> Remotion render at 1080x1920 with word-level captions.

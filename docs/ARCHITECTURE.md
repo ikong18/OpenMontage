@@ -211,6 +211,7 @@ stages:
 | `character-animation` | animation | Local rigged cartoon characters with SVG rigs, pose libraries, GSAP timelines, and HyperFrames rendering |
 | `cinematic` | cinematic | Trailer, teaser, mood-driven edits |
 | `clip-factory` | custom | Batch short-form clips from long source |
+| `shorts-factory` | custom | Batch of vertical facts Shorts, free tools only, one batch review |
 | `hybrid` | hybrid | Source footage + AI-generated support visuals |
 | `localization-dub` | custom | Subtitle, dub, and translate existing video |
 | `podcast-repurpose` | hybrid | Podcast highlights to video |

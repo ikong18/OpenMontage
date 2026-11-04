@@ -8,7 +8,7 @@ from styles.playbook_loader import list_playbooks, load_playbook
 
 NAME = "shorts-factory"
 STAGES = [
-    "topics", "script", "visuals", "voice_captions",
+    "idea", "script", "visuals", "voice_captions",
     "compose", "review_queue", "publish",
 ]
 PAID_TOOLS = {
@@ -30,9 +30,9 @@ def test_stage_order(manifest):
     assert [s["name"] for s in manifest["stages"]] == STAGES
 
 
-def test_only_topics_and_review_queue_gate():
+def test_only_idea_and_review_queue_gate():
     gated = {n for n in STAGES if _stage_requires_approval(NAME, n)}
-    assert gated == {"topics", "review_queue"}
+    assert gated == {"idea", "review_queue"}
 
 
 def test_budget_is_zero(manifest):

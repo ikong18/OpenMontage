@@ -199,6 +199,19 @@ Stage director skills teach the agent HOW to execute each pipeline stage. Each s
 | Compose Director | `pipelines/clip-factory/compose-director.md` | `compose` | Multi-job rendering, batch resilience, per-output verification |
 | Publish Director | `pipelines/clip-factory/publish-director.md` | `publish` | Posting order, platform copy, batch cataloging |
 
+### Shorts Factory Pipeline (`pipelines/shorts-factory/`) — v1.0
+
+| Skill | File | Stage | Key Capabilities |
+|-------|------|-------|-----------------|
+| **Executive Producer** | `pipelines/shorts-factory/executive-producer.md` | `all` | **Batch orchestration, two human gates, $0 rule, failure handling** |
+| Idea Director | `pipelines/shorts-factory/idea-director.md` | `idea` | Topic list, hook types, sourced facts, runtime lock, owner approval |
+| Script Director | `pipelines/shorts-factory/script-director.md` | `script` | 25-45 s scripts, hook in 2 s, sourced claims |
+| Visuals Director | `pipelines/shorts-factory/visuals-director.md` | `visuals` | Free stock footage, keyless fallback, licence log |
+| Voice & Captions Director | `pipelines/shorts-factory/voice-captions-director.md` | `voice_captions` | Piper narration, word-level captions, zero-cost log |
+| Compose Director | `pipelines/shorts-factory/compose-director.md` | `compose` | 1080x1920 renders, ffprobe verification |
+| Review Queue Director | `pipelines/shorts-factory/review-queue-director.md` | `review_queue` | Audit script, batch review on Backlot |
+| Publish Director | `pipelines/shorts-factory/publish-director.md` | `publish` | Approved-only export with metadata |
+
 ### Podcast Repurpose Pipeline (`pipelines/podcast-repurpose/`) — v2.0
 
 | Skill | File | Stage | Key Capabilities |

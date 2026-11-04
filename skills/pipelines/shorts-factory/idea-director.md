@@ -1,4 +1,4 @@
-# Topics Director — Shorts Factory Pipeline
+# Idea Director — Shorts Factory Pipeline
 
 ## When to Use
 
@@ -32,9 +32,13 @@ Every topic records:
 
 No `hook_type` should cover more than 40% of a batch of 3 or more. Reject topics that repeat an earlier batch (check `projects/*/artifacts/shorts_batch.json` for the same `topic`).
 
-### 4. Present and get approval
+### 4. Lock the render runtime
 
-Show a table of topics, angles, hook types and sources. Record the choice in `decision_log`. Wait for the owner's explicit approval before the `script` stage.
+Per `AGENT_GUIDE.md` -> "Present Both Composition Runtimes (HARD RULE)": do not silently lock `remotion`. Tell the owner that HyperFrames is an available runtime but this pipeline depends on Remotion's word-level caption burn, which HyperFrames does not match yet, so `render_runtime = "remotion"` is the only viable choice, and ask them to confirm. If HyperFrames is not installed, say so explicitly. Record a `render_runtime_selection` decision in `decision_log` with `hyperframes` in `options_considered` and `rejected_because: "word-level caption burn parity not available on shorts-factory"`.
+
+### 5. Present and get approval
+
+Show a table of topics, angles, hook types and sources. Record the choice in `decision_log`. Show the runtime decision with the topics. Wait for the owner's explicit approval before the `script` stage.
 
 ## Common Pitfalls
 
