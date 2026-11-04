@@ -1,0 +1,188 @@
+name: shorts-factory
+version: "1.0"
+description: >
+  Batch pipeline for vertical "did you know" facts Shorts, built from free tools only.
+  One project is one batch of N Shorts: the owner approves a topic list once, the agent
+  produces every video without stopping, and the owner reviews the finished set once
+  before anything is exported. Per-video metadata lives in artifacts/shorts_batch.json
+  and is audited by scripts/shorts_audit.py before the review queue opens.
+category: custom
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/shorts-factory/executive-producer
+  budget_default_usd: 0.00
+  max_revisions_per_stage: 3
+  max_send_backs: 3
+  max_wall_time_minutes: 60
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/shorts-factory/executive-producer
+  - pipelines/shorts-factory/topics-director
+  - pipelines/shorts-factory/script-director
+  - pipelines/shorts-factory/visuals-director
+  - pipelines/shorts-factory/voice-captions-director
+  - pipelines/shorts-factory/compose-director
+  - pipelines/shorts-factory/review-queue-director
+  - pipelines/shorts-factory/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - shorts-captions
+  also_works: []
+  custom_allowed: true
+
+stages:
+  - name: topics
+    skill: pipelines/shorts-factory/topics-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Every topic has an angle, a hook_type and a sourced fact
+      - No topic repeats a previous batch
+      - Hook types are varied across the batch
+    success_criteria:
+      - Schema-valid brief artifact
+      - Owner approved the topic list
+
+  - name: script
+    skill: pipelines/shorts-factory/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Hook lands in the first 2 seconds
+      - 25-45 seconds, one fact, a payoff or loop ending
+      - Every claim has at least one http(s) source
+    success_criteria:
+      - Schema-valid script artifact
+      - artifacts/shorts_batch.json lists every video with hook_type, hook_text and claims
+
+  - name: visuals
+    skill: pipelines/shorts-factory/visuals-director
+    required_artifacts_in:
+      - script
+    produces:
+      - scene_plan
+    required_tools:
+      - pexels_video
+    optional_tools:
+      - pixabay_video
+      - nasa
+      - archive_org
+      - clip_search
+    tools_available:
+      - pexels_video
+      - pixabay_video
+      - nasa
+      - archive_org
+      - clip_search
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Footage matches each beat and is framed for 9:16
+      - No clip_id is reused anywhere in the batch
+      - Every clip has source, licence and URL logged
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Missing API keys fall back to keyless sources (nasa, archive_org)
+
+  - name: voice_captions
+    skill: pipelines/shorts-factory/voice-captions-director
+    required_artifacts_in:
+      - scene_plan
+    produces:
+      - asset_manifest
+    required_tools:
+      - piper_tts
+      - subtitle_gen
+    optional_tools:
+      - audio_mixer
+    tools_available:
+      - piper_tts
+      - subtitle_gen
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Narration is free (piper_tts) and consistent across the batch
+      - Word-level captions match the narration timing
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Every cost entry is 0.0
+
+  - name: compose
+    skill: pipelines/shorts-factory/compose-director
+    required_artifacts_in:
+      - asset_manifest
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Every render is 1080x1920 and under 60 seconds
+      - Captions stay inside the safe zone
+    success_criteria:
+      - Schema-valid render_report artifact
+      - renders/<id>.mp4 exists for every video
+
+  - name: review_queue
+    skill: pipelines/shorts-factory/review-queue-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    produces:
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - scripts/shorts_audit.py exits 0 before the queue opens
+      - Owner decides approve, reject or redo for every video
+    success_criteria:
+      - Audit passed
+      - Owner approved the batch
+
+  - name: publish
+    skill: pipelines/shorts-factory/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Only approved videos are exported
+      - Titles are 100 characters or fewer, with description and tags
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export folder holds every approved video plus metadata

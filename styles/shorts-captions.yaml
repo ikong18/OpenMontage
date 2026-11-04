@@ -1,0 +1,66 @@
+identity:
+  name: "Shorts Captions"
+  category: motion-graphics
+  mood: punchy, curious, high-energy
+  pace: fast
+  best_for: "Vertical 9:16 facts Shorts with stock footage and big word-by-word captions"
+
+visual_language:
+  color_palette:
+    primary: ["#FFFFFF", "#F8FAFC"]
+    accent: ["#FACC15", "#22D3EE"]
+    background: "#0B0F19"
+    text: "#FFFFFF"
+    muted: "#CBD5E1"
+  composition: >
+    full-bleed vertical footage (1080x1920); captions centered in the lower-middle third,
+    bottom margin at least 280 px and side margins at least 60 px to clear the Shorts UI;
+    captions are Inter 800 at about 84 px with a 6 px black outline, the active word
+    highlighted in #FACC15
+  texture: clean, slight dark gradient under captions for legibility
+
+typography:
+  headings:
+    font: "Inter"
+    weight: 800
+    tracking: "-0.01em"
+  body:
+    font: "Inter"
+    weight: 800
+    line_height: 1.15
+  scale_system: "major_third"
+  weight_matrix:
+    title: 800
+    heading: 800
+    body: 800
+    caption: 800
+
+motion:
+  transitions: [cut, quick-zoom, slide-up]
+  animation_style: "snappy, short ease-out, active word pops in with a small scale bump"
+  pacing_rules:
+    min_scene_hold_seconds: 1.5
+    max_scene_hold_seconds: 4
+    transition_duration_seconds: 0.15
+  entrance: "word pop (scale 0.9 -> 1.0, 80 ms)"
+  exit: "hard cut"
+
+audio:
+  voice_style: "clear, upbeat, slightly fast narration; no long pauses"
+  music_mood: "none by default (free tools only); optional royalty-free low bed"
+  music_volume: 0.06
+  ducking_threshold_db: -4
+
+asset_generation:
+  image_prompt_prefix: "vertical 9:16, high contrast, "
+  consistency_anchors:
+    - "All footage framed for 9:16; subject kept inside the center safe zone"
+    - "Same caption font, outline and highlight color on every Short in a batch"
+
+quality_rules:
+  - "Output is 1080x1920 and strictly under 60 seconds"
+  - "The hook appears within the first 2 seconds"
+  - "Captions never leave the safe zone (bottom margin >= 280 px, sides >= 60 px)"
+  - "Maximum 4 words on screen per caption line"
+  - "No footage clip is reused anywhere in the same batch"
+  - "Every clip has a logged source, licence and URL"
