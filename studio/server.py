@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 import shutil
 from contextlib import asynccontextmanager
@@ -16,7 +17,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 
 from lib.shorts.platforms import get_platform
-from lib.shorts.spec import STAGES, load_spec
+from lib.shorts.spec import STAGES, load_spec, save_spec
+from lib.shorts.voices import (ENGLISH_VOICES, kokoro_available, synthesize_kokoro, validate_voice)
 from studio.actions import AI_STEPS, REPO, approval_argv, plan_for, redo_video
 from studio.ai import AiClient
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
@@ -28,6 +30,20 @@ from studio.steps import STEPS, gate_status, next_action, step_states
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 SSE_HEARTBEAT_SECONDS = 15
+
+
+PREVIEW_TEXT = "Venus is hotter than Mercury, even though Mercury is closer to the Sun."
+PIPER_DEFAULT = {"engine": "piper", "model": "en_US-lessac-medium", "length_scale": 0.95}
+_ACCENT = {"af": "US female", "am": "US male", "bf": "British female", "bm": "British male"}
+
+
+def voice_catalog() -> dict[str, Any]:
+    kokoro = [{"id": v, "label": f"{v.split('_', 1)[1].title()} - {_ACCENT[v[:2]]}"} for v in ENGLISH_VOICES]
+    return {
+        "piper": {"ready": shutil.which("piper") is not None,
+                  "voices": [{"id": "en_US-lessac-medium", "label": "Lessac - US (the original voice)"}]},
+        "kokoro": {"ready": kokoro_available(), "voices": kokoro},
+    }
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -160,6 +176,8 @@ def create_app(
             "settings": load_settings(project),
             "providers": {name: provider_ready(name) for name in PROVIDERS},
             "fact_check": fact,
+            "voice": {"engine": "piper", **(spec.get("voice") or PIPER_DEFAULT)},
+            "voices": voice_catalog(),
             "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id,
                                 flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale"))),
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
@@ -302,6 +320,63 @@ def create_app(
             raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
         await asyncio.to_thread(redo_video, project, video_id, str(body.get("note") or "redo"))
         return {"ok": True}
+
+    def _clean_voice(body: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        engine = body.get("engine", "piper")
+        if engine == "kokoro":
+            voice: dict[str, Any] = {"engine": "kokoro", "voice": body.get("voice", "af_heart")}
+            if "speed" in body:
+                voice["speed"] = body["speed"]
+        else:
+            voice = {**PIPER_DEFAULT, **{k: v for k, v in current.items() if k in ("model", "length_scale") and current.get("engine", "piper") == "piper"}}
+            voice["engine"] = engine
+            for key in ("model", "length_scale"):
+                if key in body:
+                    voice[key] = body[key]
+        problems = validate_voice(voice)
+        if problems:
+            raise HTTPException(status_code=422, detail="; ".join(problems))
+        if voice["engine"] == "kokoro" and not kokoro_available():
+            raise HTTPException(status_code=422, detail="Kokoro is not set up on this computer (see studio/README.md)")
+        return voice
+
+    @app.put("/api/batches/{batch_id}/voice", dependencies=[Depends(require_token)])
+    async def put_voice(batch_id: str, body: dict = Body(default_factory=dict)) -> dict:
+        project = project_or_404(batch_id)
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        spec = load_spec(project)
+        spec["voice"] = _clean_voice(body, spec.get("voice") or {})
+        save_spec(project, spec)
+        return spec["voice"]
+
+    @app.post("/api/batches/{batch_id}/voice/preview", dependencies=[Depends(require_token)])
+    async def preview_voice(batch_id: str, body: dict = Body(default_factory=dict)) -> dict:
+        project = project_or_404(batch_id)
+        voice = _clean_voice(body, load_spec(project).get("voice") or {})
+        label = voice["voice"] if voice["engine"] == "kokoro" else voice["model"]
+        speed = voice.get("speed", voice.get("length_scale", ""))
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"voice_preview_{voice['engine']}_{label}_{speed}") + ".wav"
+        out = project / "review" / name
+
+        def make() -> None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if voice["engine"] == "kokoro":
+                synthesize_kokoro(voice, PREVIEW_TEXT, out)
+                return
+            from tools.tool_registry import registry
+
+            registry.discover()
+            tool = registry._tools["piper_tts"]
+            if tool.get_status().value != "available":
+                raise HTTPException(status_code=422, detail="Piper is not available on this computer")
+            result = tool.execute({"text": PREVIEW_TEXT, "output_path": str(out), "model": voice["model"],
+                                   "length_scale": voice["length_scale"]})
+            if not result.success:
+                raise HTTPException(status_code=500, detail=f"Piper failed: {(result.error or '')[:200]}")
+
+        await asyncio.to_thread(make)
+        return {"url": f"/media/{batch_id}/review/{name}"}
 
     @app.get("/media/{batch_id}/{path:path}")
     async def media(batch_id: str, path: str):

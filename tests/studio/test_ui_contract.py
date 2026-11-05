@@ -105,3 +105,9 @@ def test_fact_check_is_shown_next_to_the_claims():
     js = _read("studio.js")
     for needle in ("fact_check", "Fact-check again", "factcheck", "verdict"):
         assert needle in js, needle
+
+
+def test_voice_picker_with_preview():
+    js = _read("studio.js")
+    for needle in ("/voice/preview", "/voice", "Preview voice", "voices", "<audio" if False else "audio"):
+        assert needle in js, needle

@@ -149,9 +149,34 @@ function initBatch() {
   };
   function renderSettings() {
     const s = data.settings, ready = data.providers || {};
-    const sig = JSON.stringify([s, ready]);
+    const sig = JSON.stringify([s, ready, data.voice, data.voices]);
     if (sig === settingsSig) return;
     settingsSig = sig;
+    const voices = data.voices || {};
+    const current = data.voice || { engine: "piper" };
+    const currentId = current.engine === "kokoro" ? "kokoro:" + (current.voice || "af_heart") : "piper:" + (current.model || "en_US-lessac-medium");
+    const voiceOption = (engine, v) => h("option", { value: `${engine}:${v.id}`, selected: `${engine}:${v.id}` === currentId }, v.label);
+    const pickVoice = h("select", { onchange: (ev) => {
+      const [engine, id] = ev.target.value.split(":");
+      action(async () => {
+        await api("PUT", `${base}/voice`, engine === "kokoro" ? { engine, voice: id } : { engine, model: id });
+        toast("Voice changed - the videos will be voiced and rendered again.", "ok");
+      });
+    } },
+    ["piper", "kokoro"].map((engine) => h("optgroup", { label: engine === "piper" ? "Piper (original)" : voices[engine] && voices[engine].ready ? "Kokoro (newer, more natural)" : "Kokoro (not set up)" },
+      ((voices[engine] || {}).voices || []).map((v) => voiceOption(engine, v)))));
+    const player = h("audio", { controls: true, hidden: true });
+    const previewBtn = h("button", { onclick: async () => {
+      previewBtn.disabled = true;
+      try {
+        const [engine, id] = pickVoice.value.split(":");
+        const res = await api("POST", `${base}/voice/preview`, engine === "kokoro" ? { engine, voice: id } : { engine, model: id });
+        player.src = res.url + "?t=" + Date.now();
+        player.hidden = false;
+        player.play().catch(() => {});
+      } catch (e) { banner(e.message); }
+      previewBtn.disabled = false;
+    } }, "Preview voice");
     const label = (p) => (p === "claude" ? "Claude" : "Codex") + (ready[p] ? "" : " (not installed)");
     const select = h("select", { onchange: (ev) => updateSettings({ provider: ev.target.value }) },
       ["claude", "codex"].map((p) => h("option", { value: p, selected: p === s.provider, disabled: !ready[p] }, label(p))));
@@ -159,6 +184,7 @@ function initBatch() {
       onchange: (ev) => updateSettings({ autopilot: ev.target.checked }) });
     $("settings").replaceChildren(
       h("label", { class: "inline" }, "AI for this batch ", select),
+      h("label", { class: "inline" }, "Voice ", pickVoice), previewBtn, player,
       h("label", { class: "inline" }, auto, " Keep going automatically after the scripts (footage, voice and render). I still approve the topics and the final batch myself."));
   }
   const saveVideos = (stage) => action(async () => {

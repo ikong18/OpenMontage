@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.shorts.align import detect_speech_spans, split_sentences, to_remotion_captions  # noqa: E402
 from lib.shorts.whisper_align import make_aligner  # noqa: E402
+from lib.shorts.voices import kokoro_available, synthesize_kokoro  # noqa: E402
 from lib.shorts.batch import (  # noqa: E402
     derive_batch, read_batch, record_cost, render_fingerprint, voice_fingerprint, write_batch,
 )
@@ -183,19 +184,26 @@ def cmd_voice(args: argparse.Namespace) -> int:
             print(violation)
         return 1
     registry = _registry()
-    tts, subs = registry._tools["piper_tts"], registry._tools["subtitle_gen"]
-    if tts.get_status().value != "available":
-        raise RuntimeError("piper_tts is unavailable; install piper-tts and a voice (pip install piper-tts)")
-    batch = _load_batch(project, spec)
     voice = spec.get("voice") or {}
+    engine = voice.get("engine", "piper")
+    tts, subs = registry._tools["piper_tts"], registry._tools["subtitle_gen"]
+    if engine == "piper" and tts.get_status().value != "available":
+        raise RuntimeError("piper_tts is unavailable; install piper-tts and a voice (pip install piper-tts)")
+    if engine == "kokoro" and not kokoro_available():
+        raise RuntimeError("Kokoro is not set up: pip install kokoro-onnx soundfile and download the two model files "
+                           "into models/kokoro (see studio/README.md)")
+    batch = _load_batch(project, spec)
     audio_dir = project / "assets" / "audio"
     for video in _selected(spec, args.video):
         wav = audio_dir / f"{video['id']}.wav"
-        result = tts.execute({"text": video["narration"], "output_path": str(wav),
-                              "model": voice.get("model", "en_US-lessac-medium"),
-                              "length_scale": voice.get("length_scale", 0.95)})
-        if not result.success:
-            raise RuntimeError(f"{video['id']}: piper failed: {_first_line(result.error or '')}")
+        if engine == "kokoro":
+            synthesize_kokoro(voice, video["narration"], wav)
+        else:
+            result = tts.execute({"text": video["narration"], "output_path": str(wav),
+                                  "model": voice.get("model", "en_US-lessac-medium"),
+                                  "length_scale": voice.get("length_scale", 0.95)})
+            if not result.success:
+                raise RuntimeError(f"{video['id']}: piper failed: {_first_line(result.error or '')}")
         aligner = make_aligner()
         timings = aligner.align(video["narration"], wav)
         timing_method = getattr(aligner, "method", "estimate")
@@ -223,7 +231,11 @@ def cmd_voice(args: argparse.Namespace) -> int:
         entry["timing"] = timing_method
         entry["voice_hash"] = voice_fingerprint(spec, video)
         entry.pop("render_hash", None)  # the old render used the old audio
-        record_cost(batch, video["id"], "piper_tts", "piper", 0.0)
+        entry["cost_entries"] = [e for e in entry.get("cost_entries", []) if e.get("tool") not in ("piper_tts", "kokoro_onnx")]
+        if engine == "kokoro":
+            record_cost(batch, video["id"], "kokoro_onnx", "kokoro", 0.0)
+        else:
+            record_cost(batch, video["id"], "piper_tts", "piper", 0.0)
         record_cost(batch, video["id"], "subtitle_gen", "openmontage", 0.0)
         write_batch(project, batch)
         print(f"voiced {video['id']}: {duration:.1f}s, {len(timings)} words (timing: {timing_method})")

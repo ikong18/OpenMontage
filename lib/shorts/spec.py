@@ -9,6 +9,7 @@ from typing import Any
 
 from lib.shorts.platforms import PLATFORM_NAMES, get_platform
 from lib.shorts.props import CAPTION_STYLE
+from lib.shorts.voices import validate_voice
 
 HOOK_TYPES = ("question", "shocking_stat", "myth_bust", "comparison", "countdown")
 SPEC_FILE = Path("artifacts") / "batch_spec.json"
@@ -78,6 +79,8 @@ def validate_spec(spec: dict[str, Any], project_dir: Path, stage: str = "full") 
         violations.append(f"spec: platform '{platform_name}' is not one of {', '.join(PLATFORM_NAMES)}")
     else:
         platform = get_platform(platform_name)
+
+    violations.extend(f"spec: {problem}" for problem in validate_voice(spec.get("voice")))
 
     style = spec.get("caption_style")
     if style is not None:

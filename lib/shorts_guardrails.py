@@ -15,7 +15,7 @@ MAX_DURATION_S = 60.0  # strictly under
 # Providers that are free to run. Anything else fails the zero-cost check even
 # when it reports cost_usd == 0.0, because free-only is a hard rule of the pipeline.
 FREE_PROVIDERS = frozenset({
-    "piper", "openmontage", "remotion", "ffmpeg", "local",
+    "piper", "kokoro", "openmontage", "remotion", "ffmpeg", "local",
     "nasa", "wikimedia", "archive_org", "pexels", "pixabay",
 })
 
