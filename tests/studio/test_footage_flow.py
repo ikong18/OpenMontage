@@ -14,7 +14,7 @@ from studio.batches import create_batch
 from studio.footage import load_check, render_blockers
 from studio.jobs import JobContext
 
-SUBJECT = "Wallace's giant bee, the world's largest bee, or at least a large wild bee"
+SUBJECT = "Wallace's giant bee (Megachile pluto), the world's largest bee"
 GOOD_FRAMES = [2, 3, 4, 5, 6, 7]
 
 
@@ -96,15 +96,14 @@ def batch(tmp_path):
 
 
 def queries(inputs):
-    return {"items": [{"id": "v1", "subject": SUBJECT, "queries": [
+    return {"items": [{"id": "v1", "subject": SUBJECT, "stand_ins": "another large wild bee, such as a leafcutter bee", "queries": [
         {"source": "wikimedia", "query": "Megachile pluto", "tier": "exact"},
         {"source": "wikimedia", "query": "giant bee", "tier": "related"}]}]}
 
 
 def pick(*clip_ids, match="related"):
     def handler(inputs):
-        known = {c["clip_id"] for v in inputs["videos"] for c in v["candidates"]}
-        return {"items": [{"id": "v1", "picks": [{"clip_id": c, "match": match, "why": "title says bee"} for c in clip_ids if c in known or True]}]}
+        return {"items": [{"id": "v1", "picks": [{"clip_id": c, "match": match, "why": "title says bee"} for c in clip_ids]}]}
     return handler
 
 
@@ -141,7 +140,7 @@ def handlers(**over):
     return base
 
 
-RESULTS = [("c_lecture", "Hoe hebben muggen het verloop van de wereldgeschiedenis bepaald (2-5)", "180.0", "832"),
+RESULTS = [("c_lecture", "Hoe hebben muggen het verloop van de wereldgeschiedenis bepaald (2-5)", "180.0", "300"),
            ("c_bee", "Flying bee on flower in slow motion", "6.0", "17"),
            ("c_huge", "Giant bee documentary", "900.0", "300")]
 
@@ -165,7 +164,9 @@ def test_verified_footage_is_used_recorded_disclosed_and_reviewed_by_the_other_a
     assert "footage_review" not in [c["task"] for c in ai.calls]
     review_call = other.calls[0]
     assert review_call["tools"] == ["Read"] and review_call["add_dirs"] == [batch / "review"]
-    assert len(review_call["inputs"]["images"]) == 4
+    assert len(review_call["inputs"]["images"]) == 12, "three real frames (start, middle, end) for each of the four shots"
+    assert review_call["inputs"]["videos"][0]["stand_ins"].startswith("another large wild bee")
+    assert load_spec(batch)["videos"][0]["footage_stand_ins"].startswith("another large wild bee")
 
 
 def test_oversize_results_never_reach_the_ai_and_unknown_ids_are_ignored(batch, tmp_path):
@@ -269,7 +270,9 @@ def test_a_rejected_shot_is_recorded_and_blocks_the_render_until_the_owner_overr
     plan = plan_for("render", batch, ScriptedAi({}), {}, Cli(batch, RESULTS))
     with pytest.raises(ValueError, match="does not show"):
         plan(_ctx(tmp_path))
-    spec["videos"][0]["footage_override"] = True
+    from studio.footage import cuts_hash
+
+    spec["videos"][0]["footage_override"] = cuts_hash(spec["videos"][0], spec)
     save_spec(batch, spec)
     assert render_blockers(batch, load_spec(batch), ["v1"]) == []
 
@@ -295,15 +298,17 @@ def test_checking_existing_footage_does_not_search_or_change_the_cuts(batch, tmp
     before = load_spec(batch)["videos"][0]["cuts"]
     other = ScriptedAi(handlers(footage_review=review("yes", "no", "yes", "yes")))
     cli = Cli(batch, RESULTS)
-    ai = ScriptedAi({})
+    ai = ScriptedAi({"footage_verify": verify({"c_bee": good()})})
     run(batch, tmp_path, ai, cli, reviewer=(other, "codex", "claude"), params={"verify_only": True})
-    assert load_spec(batch)["videos"][0]["cuts"] == before and ai.calls == [] and cli.calls == []
+    assert load_spec(batch)["videos"][0]["cuts"] == before
+    assert not [c for c in cli.calls if c[0] in ("search", "fetch", "voice")], "checking must not search or download"
+    assert [c["task"] for c in ai.calls] == ["footage_verify"], "the clip behind the shots is looked at again"
     assert [c["verdict"] for c in load_check(batch)["videos"]["v1"]["cuts"]] == ["yes", "no", "yes", "yes"]
 
 
 def test_new_footage_clears_an_old_override(batch, tmp_path):
     spec = load_spec(batch)
-    spec["videos"][0]["footage_override"] = True
+    spec["videos"][0]["footage_override"] = "stale-hash"
     save_spec(batch, spec)
     run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
     assert not load_spec(batch)["videos"][0].get("footage_override")
@@ -483,7 +488,9 @@ def test_the_review_cannot_be_approved_while_a_shot_does_not_show_the_subject(ba
     spec = _rendered_with_bad_footage(batch, tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="does not show"):
         approval_argv(batch, "review_queue")
-    spec["videos"][0]["footage_override"] = True
+    from studio.footage import cuts_hash
+
+    spec["videos"][0]["footage_override"] = cuts_hash(spec["videos"][0], spec)
     save_spec(batch, spec)
     assert approval_argv(batch, "review_queue")[-2:] == ["--approve", "review_queue"]
 
@@ -511,3 +518,84 @@ def test_footage_with_no_check_at_all_cannot_be_exported_either(batch, tmp_path)
     cli = FakeCliRecorder()
     with pytest.raises(ValueError, match="not been checked"):
         plan_for("export", batch, ScriptedAi({}), {}, cli)(_ctx(tmp_path))
+
+
+
+# ---- the review findings -------------------------------------------------------------------------------------------------------
+
+
+def test_a_shot_moved_by_hand_is_not_verified_until_the_clip_is_looked_at_again(batch, tmp_path):
+    run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+    spec = load_spec(batch)
+    spec["videos"][0]["cuts"][0]["in"] = 0.0                       # frame 0 was never verified
+    save_spec(batch, spec)
+    ai, other = ScriptedAi({"footage_verify": verify({"c_bee": good()})}), ScriptedAi(handlers())
+    run(batch, tmp_path, ai, Cli(batch, RESULTS), reviewer=(other, "codex", "claude"), params={"verify_only": True})
+    message = " ".join(render_blockers(batch, load_spec(batch), ["v1"]))
+    assert "shot 1" in message and "not on footage that was verified" in message
+
+
+def test_checking_legacy_footage_verifies_its_clips_against_the_videos_subject(batch, tmp_path):
+    """Footage chosen before verification existed has no `verified` record: the check creates one, or blocks."""
+    spec = load_spec(batch)
+    (batch / "assets" / "video").mkdir(parents=True, exist_ok=True)
+    (batch / "assets" / "video" / "old.webm").write_bytes(b"old")
+    spec["sources"] = {"old": {"path": "assets/video/old.webm", "clip_id": "oldclip", "provider": "wikimedia", "license": "x",
+                               "url": "https://x", "mode": "fill"}}
+    spec["videos"][0]["cuts"] = [{"source": "old", "in": 8 + 4 * i, "dur": 3} for i in range(4)]
+    save_spec(batch, spec)
+    ai = ScriptedAi({"footage_verify": verify({"old": BAD})})
+    run(batch, tmp_path, ai, Cli(batch, RESULTS, durations={"old": 60.0}), reviewer=(ScriptedAi(handlers(footage_review=review("no", "no", "no", "no"))), "codex", "claude"),
+        params={"verify_only": True})
+    spec = load_spec(batch)
+    assert spec["sources"]["old"]["verified"]["match"] == "unrelated"
+    assert spec["videos"][0]["footage_subject"]
+    message = " ".join(render_blockers(batch, spec, ["v1"]))
+    assert "not on footage that was verified" in message or "does not show" in message
+
+
+def test_a_long_clip_is_not_verified_from_coarse_frames(batch, tmp_path):
+    long_results = [("c_long", "A very long documentary about bees", "100.0", "3000"), ("c_bee", "Bee on flower", "6.0", "40")]
+    ai = ScriptedAi(handlers(footage_pick=pick("c_long", "c_bee")))
+    cli = Cli(batch, long_results)
+    run(batch, tmp_path, ai, cli, reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+    shown = [c["clip_id"] for c in next(c for c in ai.calls if c["task"] == "footage_pick")["inputs"]["videos"][0]["candidates"]]
+    assert "c_long" not in shown, "a 50 minute video cannot be checked frame by frame"
+
+
+def test_a_clip_that_needs_a_coarse_sheet_is_rejected(batch, tmp_path):
+    ai = ScriptedAi(handlers(footage_pick=pick("c_bee")))
+    with pytest.raises(RuntimeError, match="too long to verify"):
+        run(batch, tmp_path, ai, Cli(batch, RESULTS, durations={"v1_c_bee": 800.0}), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+
+
+def test_a_stand_in_is_never_called_exact_unless_the_ai_says_so_and_the_disclosure_follows(batch, tmp_path):
+    ai = ScriptedAi(handlers(footage_verify=verify({"c_bee": good(match="related", shows="an ordinary honey bee on a flower")})))
+    run(batch, tmp_path, ai, Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+    verify_call = next(c for c in ai.calls if c["task"] == "footage_verify")["inputs"]
+    assert verify_call["subject"] == SUBJECT and verify_call["stand_ins"].startswith("another large wild bee")
+    assert "honey bee" in load_spec(batch)["videos"][0]["description"]
+
+
+def test_a_genuine_no_that_mentions_not_seeing_something_is_kept_and_blocks(batch, tmp_path):
+    honest_no = lambda inputs: {"items": [{"id": "v1", "cuts": [  # noqa: E731
+        {"index": i, "verdict": "no", "shows": "A man lecturing at a podium; I cannot see any bee."} for i in range(4)]}]}
+    other = ScriptedAi(handlers(footage_review=honest_no))
+    run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(other, "codex", "claude"))
+    assert load_check(batch)["videos"]["v1"]["reviewer"] == "codex"
+    assert "does not show" in " ".join(render_blockers(batch, load_spec(batch), ["v1"]))
+
+
+def test_the_second_ai_gets_the_start_middle_and_end_of_every_shot(batch, tmp_path, monkeypatch):
+    times = []
+
+    def spy(video, seconds, out, width=640):
+        times.append(round(seconds, 2))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"jpg")
+        return out
+
+    monkeypatch.setattr(step_module, "extract_frame", spy)
+    run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+    first = load_spec(batch)["videos"][0]["cuts"][0]
+    assert times[:3] == [round(first["in"] + 0.3, 2), round(first["in"] + first["dur"] / 2, 2), round(first["in"] + first["dur"] - 0.3, 2)]

@@ -546,7 +546,10 @@ def test_the_owner_can_override_one_videos_footage_and_a_redo_clears_it(tmp_path
     assert client.post(url).status_code == 403
     assert client.post(f"/api/batches/{bid}/videos/v9/footage-override", headers=H).status_code == 404
     assert client.post(url, headers=H).status_code == 200
-    assert load_spec(tmp_path / bid)["videos"][0]["footage_override"] is True
+    from studio.footage import cuts_hash
+
+    spec = load_spec(tmp_path / bid)
+    assert spec["videos"][0]["footage_override"] == cuts_hash(spec["videos"][0], spec)   # tied to exactly these shots
     assert client.get(f"/api/batches/{bid}").json()["footage_check"]["videos"] == {}
     client.post(f"/api/batches/{bid}/videos/v1/redo", json={"note": "no"}, headers=H)
     assert not load_spec(tmp_path / bid)["videos"][0].get("footage_override")
@@ -586,3 +589,13 @@ def test_a_rendered_video_with_rejected_footage_still_shows_the_footage_problem_
     view = client.get(f"/api/batches/{bid}").json()
     assert view["footage_blockers"] and "does not show" in view["footage_blockers"][0]
     assert view["next"]["step"] == "footage" and "does not show" in view["next"]["text"]
+
+
+def test_saving_edits_drops_an_override_so_edited_footage_is_checked_again(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootDrop")
+    client.post(f"/api/batches/{bid}/videos/v1/footage-override", headers=H)
+    video = load_spec(tmp_path / bid)["videos"][0]
+    assert video["footage_override"]
+    assert client.put(f"/api/batches/{bid}/spec?stage=visuals", json={"videos": [video]}, headers=H).status_code == 200
+    assert "footage_override" not in load_spec(tmp_path / bid)["videos"][0]

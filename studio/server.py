@@ -464,7 +464,9 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"no such video '{video_id}'")
         if jobs.running(batch_id):
             raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
-        video["footage_override"] = True
+        from studio.footage import cuts_hash
+
+        video["footage_override"] = cuts_hash(video, spec)  # tied to exactly these shots; any change ends it
         save_spec(project, spec)
         return {"ok": True}
 

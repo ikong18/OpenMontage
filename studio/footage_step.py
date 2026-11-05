@@ -21,6 +21,8 @@ from studio.jobs import JobContext
 MAX_MB = 250
 MAX_PICKS = 5
 SHEET_FRAMES = 30
+MAX_STEP = 12  # seconds between sheet frames; a coarser sheet cannot prove a 3 s shot
+MAX_DURATION = SHEET_FRAMES * MAX_STEP
 MIN_SHOT, MAX_SHOT = 1.0, 6.0
 
 
@@ -56,7 +58,8 @@ def _candidates(ctx: JobContext, cli: Any, project: Path, queries: list[dict[str
 
             found.append({"clip_id": parts[0].strip(), "source": q["source"], "query": q["query"], "title": parts[1].strip(),
                           "size_mb": number(parts[2]), "duration": number(parts[3]) if len(parts) > 3 else None})
-    return [c for c in found if c["size_mb"] is None or c["size_mb"] <= MAX_MB]
+    return [c for c in found if (c["size_mb"] is None or c["size_mb"] <= MAX_MB)
+            and (c["duration"] is None or c["duration"] <= MAX_DURATION)]
 
 
 # ---- a downloaded clip --------------------------------------------------------------------------------------------------
@@ -74,6 +77,8 @@ def _sheet(ctx: JobContext, cli: Any, project: Path, key: str) -> dict[str, Any]
     info = run(None)
     if info["duration"] > info["step"] * SHEET_FRAMES:
         info = run(math.ceil(info["duration"] / SHEET_FRAMES))
+    if info["step"] > MAX_STEP or info["duration"] > MAX_DURATION:
+        raise RuntimeError(f"the clip is {info['duration']:.0f} s long - too long to verify frame by frame")
     return info
 
 
@@ -96,16 +101,16 @@ def _discard(project: Path, key: str) -> None:
 
 
 def _verify(ctx: JobContext, ai: AiClient, project: Path, key: str, info: dict[str, Any], subject: str,
-            narration: str) -> dict[str, Any]:
+            narration: str, stand_ins: str = "") -> dict[str, Any]:
     result = ai.run("footage_verify", {
-        "subject": subject, "narration": narration,
+        "subject": subject, "stand_ins": stand_ins, "narration": narration,
         "sources": [{"key": key, "sheet": info["path"], "step": info["step"], "cols": info["cols"], "duration": info["duration"]}],
     }, SCHEMAS["footage_verify"], TASK_TOOLS["footage_verify"], add_dirs=[project / "review"])
     item = next((i for i in result.get("items") or [] if i.get("key") == key), None)
     if item is None:
         raise ValueError(f"the AI returned no verdict for the clip {key}")
     total_frames = max(1, math.ceil(info["duration"] / info["step"]))
-    frames = sorted({int(f) for f in item.get("relevant_frames") or [] if isinstance(f, int) and 0 <= f < total_frames})
+    frames = sorted({int(f) for f in item.get("relevant_frames") or [] if isinstance(f, int) and not isinstance(f, bool) and 0 <= f < total_frames})
     match = item.get("match")
     if match not in ("exact", "related", "unrelated"):
         raise ValueError(f"the AI gave an unknown verdict '{match}' for {key}")
@@ -124,6 +129,7 @@ def footage_plan(project: Path, ai: AiClient, params: dict[str, Any], cli: Any,
 
     def body(ctx: JobContext) -> None:
         if params.get("verify_only"):
+            _reverify(ctx, ai, cli, project)
             _review(ctx, project, reviewers, None)
             return
         spec = load_spec(project)
@@ -147,6 +153,7 @@ def footage_plan(project: Path, ai: AiClient, params: dict[str, Any], cli: Any,
             if video["id"] not in plans or not str(plans[video["id"]].get("subject") or "").strip():
                 raise ValueError(f"the AI did not say what {video['id']} must show")
         subjects = {vid: str(p["subject"]).strip() for vid, p in plans.items()}
+        stand_ins = {vid: str(p.get("stand_ins") or "").strip() for vid, p in plans.items()}
 
         accepted: dict[str, list[str]] = {}
         created: list[str] = []
@@ -154,7 +161,7 @@ def footage_plan(project: Path, ai: AiClient, params: dict[str, Any], cli: Any,
             for video in need:
                 accepted[video["id"]] = _gather(ctx, ai, cli, project, video, subjects[video["id"]], plans[video["id"]],
                                                 needed[video["id"]], created)
-            _cut_and_save(ctx, ai, project, need, subjects, accepted, needed)
+            _cut_and_save(ctx, ai, project, need, subjects, accepted, needed, stand_ins)
         except BaseException:
             for key in created:  # nothing from a failed run stays behind
                 _discard(project, key)
@@ -196,8 +203,14 @@ def _gather(ctx, ai, cli, project, video, subject, plan, needed, created) -> lis
             trace.append(f"{pick['clip_id']}: download refused ({(out.strip().splitlines() or ['no reason'])[-1][:100]})")
             continue
         created.append(key)
-        info = _sheet(ctx, cli, project, key)
-        verified = _verify(ctx, ai, project, key, info, subject, str(video.get("narration") or ""))
+        try:
+            info = _sheet(ctx, cli, project, key)
+        except RuntimeError as exc:
+            trace.append(f"{pick['clip_id']}: {exc}")
+            _discard(project, key)
+            created.remove(key)
+            continue
+        verified = _verify(ctx, ai, project, key, info, subject, str(video.get("narration") or ""), str(plan.get("stand_ins") or ""))
         verified["title"] = next(c["title"] for c in candidates if c["clip_id"] == pick["clip_id"])[:160]
         if verified["match"] == "unrelated" or not verified["relevant_frames"]:
             trace.append(f"{pick['clip_id']}: not about the subject (it shows {verified['shows'] or 'something else'})")
@@ -220,7 +233,7 @@ def _gather(ctx, ai, cli, project, video, subject, plan, needed, created) -> lis
     return keys
 
 
-def _cut_and_save(ctx, ai, project, need, subjects, accepted, needed) -> None:
+def _cut_and_save(ctx, ai, project, need, subjects, accepted, needed, stand_ins=None) -> None:
     spec = load_spec(project)
     sources_in = {}
     for vid, keys in accepted.items():
@@ -253,6 +266,7 @@ def _cut_and_save(ctx, ai, project, need, subjects, accepted, needed) -> None:
     for item in items:
         video = by_id[item["id"]]
         video["footage_subject"] = subjects[item["id"]]
+        video["footage_stand_ins"] = (stand_ins or {}).get(item["id"], "")
         for field in ("redo_note", "redo_avoid", "footage_override"):
             video.pop(field, None)
     ensure_disclosure(merged)
@@ -293,8 +307,9 @@ def _cut_problems(items, need, accepted, spec, needed) -> list[str]:
     return problems
 
 
-_UNREADABLE = re.compile(r"(file|image|frame|picture)[^.]{0,40}(missing|not found|cannot be (opened|read|loaded)|unreadable|could not be (opened|read))"
-                         r"|(cannot|could not|unable to|can't) (open|read|load|view|see)", re.I)
+_UNREADABLE = re.compile(
+    r"^\s*(the\s+)?(frame|image|file|picture)s?\b.{0,30}\b(is missing|are missing|not found|could not be (opened|read|loaded)|cannot be (opened|read|loaded)|unreadable)"
+    r"|^\s*(i\s+)?(cannot|could not|can't|couldn't|unable to)\s+(open|read|load)\b", re.I)
 
 
 def _reject_unreadable(items: list[dict[str, Any]], reviewer_name: str) -> None:
@@ -315,24 +330,32 @@ def _review(ctx: JobContext, project: Path, reviewers: list[tuple[AiClient, str,
     if not videos:
         ctx.log("no shots to check")
         return
-    frames: dict[tuple[str, int], Path] = {}
+    frames: dict[tuple[str, int], list[Path]] = {}
     frame_paths: dict[str, list[str]] = {}
     for video in videos:
         rels = []
         for index, cut in enumerate(video["cuts"]):
             source = spec["sources"][cut["source"]]
-            out = project / "review" / "footage" / f"{video['id']}_{index}.jpg"
-            extract_frame(project / source["path"], float(cut["in"]) + float(cut["dur"]) / 2, out)
-            frames[(video["id"], index)] = out
-            rels.append(out.relative_to(project).as_posix())
+            start, dur = float(cut["in"]), float(cut["dur"])
+            edge = min(0.3, dur / 4)
+            paths = []
+            for k, seconds in enumerate((start + edge, start + dur / 2, start + dur - edge)):
+                out = project / "review" / "footage" / f"{video['id']}_{index}_{k}.jpg"
+                extract_frame(project / source["path"], seconds, out)
+                if not out.is_file() or out.stat().st_size == 0:
+                    raise RuntimeError(f"could not take a frame at {seconds:.1f} s of {source['path']} for {video['id']} shot {index + 1}")
+                paths.append(out)
+            frames[(video["id"], index)] = paths
+            rels.append(paths[1].relative_to(project).as_posix())
         frame_paths[video["id"]] = rels
     subjects = {v["id"]: v.get("footage_subject") or f"what this narration is about: {v.get('narration')}" for v in videos}
+    stand_ins = {v["id"]: v.get("footage_stand_ins") or "" for v in videos}
     subset = {**spec, "videos": videos}
     record = None
     for position, (client, reviewer_name, writer_name) in enumerate(reviewers):
-        ctx.log(f"asking {reviewer_name} to look at {len(frames)} real frames ...")
+        ctx.log(f"asking {reviewer_name} to look at {sum(len(p) for p in frames.values())} real frames ...")
         try:
-            result = client.run("footage_review", review_inputs(subset, subjects, frames), SCHEMAS["footage_review"],
+            result = client.run("footage_review", review_inputs(subset, subjects, frames, stand_ins), SCHEMAS["footage_review"],
                                 TASK_TOOLS["footage_review"], add_dirs=[project / "review"])
             _reject_unreadable(result.get("items") or [], reviewer_name)
             record = apply_review(subset, result.get("items") or [], writer_name, reviewer_name, frame_paths)
@@ -345,3 +368,34 @@ def _review(ctx: JobContext, project: Path, reviewers: list[tuple[AiClient, str,
     bad = sum(1 for v in record["videos"].values() for c in v["cuts"] if c["verdict"] == "no")
     partly = sum(1 for v in record["videos"].values() for c in v["cuts"] if c["verdict"] == "partly")
     ctx.log(f"footage check done: {bad} shot(s) do not show the subject, {partly} only partly")
+
+
+def _reverify(ctx: JobContext, ai: AiClient, cli: Any, project: Path) -> None:
+    """Look at the clips behind the current shots again, against each video's subject. Footage that was cut by hand or
+    before verification existed gets a verdict here; a clip that does not show the subject blocks the render."""
+    spec = load_spec(project)
+    wanted: dict[str, dict[str, Any]] = {}
+    for video in spec.get("videos") or []:
+        if not video.get("cuts"):
+            continue
+        if not video.get("footage_subject"):
+            video["footage_subject"] = f"what this narration is about: {video.get('narration') or video.get('topic')}"
+        for cut in video["cuts"]:
+            wanted.setdefault(cut["source"], video)  # a clip shared by several videos is judged against the first one's subject
+    save_spec(project, spec)
+    for key, video in wanted.items():
+        ctx.log(f"looking at {key} again ...")
+        try:
+            info = _sheet(ctx, cli, project, key)
+        except RuntimeError as exc:
+            ctx.log(f"{key}: {exc}")
+            continue
+        verified = _verify(ctx, ai, project, key, info, video["footage_subject"], str(video.get("narration") or ""),
+                           str(video.get("footage_stand_ins") or ""))
+        spec = load_spec(project)
+        verified["title"] = (spec["sources"][key].get("verified") or {}).get("title", "")
+        spec["sources"][key]["verified"] = verified
+        save_spec(project, spec)
+    spec = load_spec(project)
+    ensure_disclosure(spec)
+    save_spec(project, spec)

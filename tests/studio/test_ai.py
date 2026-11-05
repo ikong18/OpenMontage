@@ -230,7 +230,7 @@ def test_an_invalid_directory_error_explains_the_likely_cause(monkeypatch, tmp_p
 
 def test_footage_tasks_are_defined_with_the_fields_the_checks_need():
     q = SCHEMAS["footage_queries"]["properties"]["items"]["items"]
-    assert "subject" in q["required"]
+    assert "subject" in q["required"] and "stand_ins" in q["required"]
     query = q["properties"]["queries"]["items"]
     assert query["properties"]["tier"]["enum"] == ["exact", "related"] and "tier" in query["required"]
     pick = SCHEMAS["footage_pick"]["properties"]["items"]["items"]

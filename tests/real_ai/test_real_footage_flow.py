@@ -55,8 +55,9 @@ def test_the_giant_bee_video_gets_bee_footage_or_nothing(ai, provider, tmp_path)
     assert all(s["verified"]["match"] in ("exact", "related") for s in spec["sources"].values())
     assert check["blocked"] == 0 and not check["stale"], check
     assert render_blockers(project, spec, ["v1"]) == []
-    text = " ".join([video["footage_subject"]] + [c["shows"] for c in video["cuts"]]).lower()
-    assert "bee" in text
+    seen = " ".join([c["shows"] for c in video["cuts"]] + [c["shows"] for c in check["cuts"]]).lower()
+    assert "bee" in seen, f"neither the cutting AI nor the second AI said it saw a bee: {seen}"
+    assert not any(w in seen for w in ("lecture", "podium", "speaker")), seen
     if any(s["verified"]["match"] == "related" for s in spec["sources"].values()):
         assert "Footage is illustrative" in video["description"], "related footage must be disclosed"
     assert load_check(project)["videos"]["v1"]["reviewer"] == provider

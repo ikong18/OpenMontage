@@ -44,12 +44,12 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     }),
     "footage_queries": _wrap({
         "type": "object",
-        "properties": {"id": _STR, "subject": _STR, "queries": {"type": "array", "items": {
+        "properties": {"id": _STR, "subject": _STR, "stand_ins": _STR, "queries": {"type": "array", "items": {
             "type": "object",
             "properties": {"source": {"type": "string", "enum": ["nasa", "wikimedia"]}, "query": _STR,
                            "tier": {"type": "string", "enum": ["exact", "related"]}},
             "required": ["source", "query", "tier"]}}},
-        "required": ["id", "subject", "queries"],
+        "required": ["id", "subject", "stand_ins", "queries"],
     }),
     "footage_pick": _wrap({
         "type": "object",

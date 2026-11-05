@@ -80,11 +80,15 @@ def _review(vid="v1", verdicts=("yes", "yes")):
 
 def test_review_inputs_list_the_frame_files_in_order(project):
     spec = load_spec(project)
-    frames = {("v1", 0): project / "review" / "footage" / "v1_0.jpg", ("v1", 1): project / "review" / "footage" / "v1_1.jpg"}
-    inputs = review_inputs(spec, {"v1": "wild bees on flowers"}, frames)
-    assert inputs["images"] == [str(frames[("v1", 0)]), str(frames[("v1", 1)])]
-    assert inputs["videos"][0]["subject"] == "wild bees on flowers"
+    def trio(i):
+        return [project / "review" / "footage" / f"v1_{i}_{k}.jpg" for k in range(3)]
+
+    frames = {("v1", 0): trio(0), ("v1", 1): trio(1)}
+    inputs = review_inputs(spec, {"v1": "wild bees on flowers"}, frames, {"v1": "other bees"})
+    assert inputs["images"] == [str(p) for p in trio(0) + trio(1)]
+    assert inputs["videos"][0]["subject"] == "wild bees on flowers" and inputs["videos"][0]["stand_ins"] == "other bees"
     assert [c["index"] for c in inputs["videos"][0]["cuts"]] == [0, 1]
+    assert inputs["videos"][0]["cuts"][0]["frames"] == [str(p) for p in trio(0)]
 
 
 def test_apply_review_keeps_a_record_with_who_looked_and_which_frames(project):
@@ -119,7 +123,9 @@ def test_render_gate_blocks_unchecked_stale_and_rejected_footage_but_allows_an_o
     assert "not been checked" in " ".join(render_blockers(project, spec, ["v1"]))
     save_check(project, apply_review(spec, [_review(verdicts=("yes", "no"))], "a", "b", {}))
     assert "does not show" in " ".join(render_blockers(project, spec, ["v1"]))
-    spec["videos"][0]["footage_override"] = True
+    spec["videos"][0]["footage_override"] = True        # a bare True is not an override: it has to name the shots it covers
+    assert "does not show" in " ".join(render_blockers(project, spec, ["v1"]))
+    spec["videos"][0]["footage_override"] = cuts_hash(spec["videos"][0], spec)
     assert render_blockers(project, spec, ["v1"]) == []
     spec["videos"][0]["footage_override"] = False
     save_check(project, apply_review(spec, [_review(verdicts=("yes", "partly"))], "a", "b", {}))
@@ -128,9 +134,54 @@ def test_render_gate_blocks_unchecked_stale_and_rejected_footage_but_allows_an_o
     assert "changed since" in " ".join(render_blockers(project, spec, ["v1"]))
 
 
+def test_an_override_stops_covering_the_footage_the_moment_the_shots_change(project):
+    spec = load_spec(project)
+    save_check(project, apply_review(spec, [_review(verdicts=("yes", "no"))], "a", "b", {}))
+    spec["videos"][0]["footage_override"] = cuts_hash(spec["videos"][0], spec)
+    assert render_blockers(project, spec, ["v1"]) == []
+    assert check_view(project, spec)["videos"]["v1"]["override"] is True
+    spec["videos"][0]["cuts"].append({"source": "s", "in": 20, "dur": 3})
+    assert render_blockers(project, spec, ["v1"]) != []
+    assert check_view(project, spec)["videos"]["v1"]["override"] is False
+
+
+def test_a_good_second_look_does_not_excuse_shots_that_are_not_on_verified_footage(project):
+    spec = load_spec(project)
+    spec["videos"][0]["cuts"] = [_cut(8, 3), _cut(0, 3)]            # the second shot is on frame 0, which was never verified
+    save_check(project, apply_review(spec, [_review(verdicts=("yes", "yes"))], "a", "b", {}))
+    message = " ".join(render_blockers(project, spec, ["v1"]))
+    assert "shot 2" in message and "not on footage that was verified" in message
+
+
+def test_a_clip_verified_for_another_subject_does_not_count(project):
+    spec = load_spec(project)
+    spec["videos"][0]["footage_subject"] = "giant bees"
+    spec["sources"]["s"]["verified"] = {**VERIFIED, "subject": "a lecture about mosquitoes"}
+    save_check(project, apply_review(spec, [_review(verdicts=("yes", "yes"))], "a", "b", {}))
+    assert "not on footage that was verified" in " ".join(render_blockers(project, spec, ["v1"]))
+    spec["sources"]["s"]["verified"]["subject"] = "giant bees"
+    assert render_blockers(project, spec, ["v1"]) == []
+
+
 def test_a_damaged_record_is_ignored(project):
     (project / "artifacts").mkdir(exist_ok=True)
     (project / "artifacts" / "footage_check.json").write_text("{nope", encoding="utf-8")
     assert load_check(project) is None
     (project / "artifacts" / "footage_check.json").write_text(json.dumps({"videos": {"v1": "garbage"}}), encoding="utf-8")
     assert check_view(project, load_spec(project))["videos"] == {}
+
+
+def test_the_disclosure_is_rebuilt_from_the_current_footage_and_never_carries_links():
+    spec = {"sources": {"s": {"verified": {**VERIFIED, "shows": "a bee on a flower, visit https://spam.example/x now"}},
+                        "e": {"verified": {"match": "exact", "shows": "the bee"}}},
+            "videos": [{"id": "v1", "description": "A fact.", "cuts": [_cut(8, 3)]}]}
+    ensure_disclosure(spec)
+    first = spec["videos"][0]["description"]
+    assert "spam.example" not in first and first.startswith("A fact. Footage is illustrative")
+    spec["videos"][0]["cuts"] = [_cut(8, 3, "e")]                      # redone with the exact subject: the note must go
+    ensure_disclosure(spec)
+    assert spec["videos"][0]["description"] == "A fact."
+    spec["videos"][0]["cuts"] = [_cut(8, 3)]
+    ensure_disclosure(spec)
+    ensure_disclosure(spec)
+    assert spec["videos"][0]["description"].count("Footage is illustrative") == 1

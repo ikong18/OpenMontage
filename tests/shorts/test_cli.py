@@ -353,3 +353,24 @@ def test_video_option_accepts_several_ids_and_rejects_unknown_ones(project, caps
     assert [v["id"] for v in shorts_batch._selected(spec, None)] == ["v1"]
     with pytest.raises(ValueError, match="v9"):
         shorts_batch._selected(spec, "v1,v9")
+
+
+def test_fetch_picks_only_the_exact_clip_id_never_a_longer_one(project, monkeypatch):
+    from types import SimpleNamespace as NS
+
+    monkeypatch.setattr("scripts.shorts_batch.tools_stock_search", lambda *a, **k: None, raising=False)
+    candidates = [NS(clip_id="wikimedia_1234", download_url="u", license="l", source_url="s"),
+                  NS(clip_id="wikimedia_123", download_url="u", license="l", source_url="s")]
+
+    class Adapter:
+        name = "wikimedia"
+
+        def search(self, query, filters):
+            return candidates
+
+    import tools.video.stock_sources as stock
+
+    monkeypatch.setattr(stock, "all_sources", lambda: [Adapter()])
+    assert shorts_batch._resolve_candidate("wikimedia", "q", "wikimedia_123").clip_id == "wikimedia_123"
+    with pytest.raises(ValueError):
+        shorts_batch._resolve_candidate("wikimedia", "q", "wikimedia_12")

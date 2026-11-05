@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,13 +44,15 @@ def relevant_seconds(verified: dict[str, Any]) -> float:
 
 
 def unverified_cuts(spec: dict[str, Any]) -> list[dict[str, Any]]:
-    """Cuts that are not on frames an AI verified as showing the subject."""
+    """Cuts that are not on frames an AI verified as showing the video's subject."""
     problems = []
     sources = spec.get("sources") or {}
     for video in spec.get("videos") or []:
+        subject = video.get("footage_subject")
         for index, cut in enumerate(video.get("cuts") or []):
             verified = (sources.get(cut.get("source")) or {}).get("verified")
-            if not cut_is_verified(cut, verified):
+            wrong_subject = bool(subject and verified and verified.get("subject") != subject)
+            if wrong_subject or not cut_is_verified(cut, verified):
                 problems.append({"video": video.get("id"), "index": index, "source": cut.get("source")})
     return problems
 
@@ -69,17 +72,21 @@ def disclosure_for(spec: dict[str, Any], video: dict[str, Any]) -> str | None:
     related = []
     for cut in video.get("cuts") or []:
         verified = (sources.get(cut.get("source")) or {}).get("verified") or {}
-        if verified.get("match") == "related" and verified.get("shows") and verified["shows"] not in related:
-            related.append(verified["shows"].rstrip("."))
+        shows = re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", str(verified.get("shows") or ""))).strip().rstrip(".")
+        if verified.get("match") == "related" and shows and shows not in related:
+            related.append(shows)
     return f"{DISCLOSURE_MARK} (it shows a related subject, not the exact one): {'; '.join(related)}." if related else None
 
 
 def ensure_disclosure(spec: dict[str, Any]) -> None:
+    """Rebuild the note from the footage the video has now: an old note never survives a change of footage."""
     for video in spec.get("videos") or []:
-        text = disclosure_for(spec, video)
         description = str(video.get("description") or "")
-        if text and DISCLOSURE_MARK not in description:
-            video["description"] = f"{description} {text}".strip()
+        cut_at = description.find(DISCLOSURE_MARK)
+        if cut_at >= 0:
+            description = description[:cut_at].rstrip()
+        text = disclosure_for(spec, video)
+        video["description"] = f"{description} {text}".strip() if text else description
 
 
 # ---- the second AI's look at the finished cuts --------------------------------------------------------------------
@@ -92,19 +99,21 @@ def cuts_hash(video: dict[str, Any], spec: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def review_inputs(spec: dict[str, Any], subjects: dict[str, str], frames: dict[tuple[str, int], Path]) -> dict[str, Any]:
+def review_inputs(spec: dict[str, Any], subjects: dict[str, str], frames: dict[tuple[str, int], list[Path]],
+                  stand_ins: dict[str, str] | None = None) -> dict[str, Any]:
+    """Each shot is shown by several real frames (start, middle, end) so a lucky frame cannot hide a bad shot."""
     videos, images = [], []
     for video in spec.get("videos") or []:
         cuts = []
         for index, _cut in enumerate(video.get("cuts") or []):
-            path = frames.get((video["id"], index))
-            if path is None:
+            paths = frames.get((video["id"], index))
+            if not paths:
                 continue
-            cuts.append({"index": index, "frame": str(path)})
-            images.append(str(path))
+            cuts.append({"index": index, "frames": [str(p) for p in paths]})
+            images.extend(str(p) for p in paths)
         if cuts:
             videos.append({"id": video["id"], "subject": subjects.get(video["id"]) or video.get("topic"),
-                           "narration": video.get("narration"), "cuts": cuts})
+                           "stand_ins": (stand_ins or {}).get(video["id"]) or "", "narration": video.get("narration"), "cuts": cuts})
     return {"videos": videos, "images": images}
 
 
@@ -158,6 +167,12 @@ def save_check(project_dir: Path, record: dict[str, Any], merge: bool = False) -
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def override_valid(video: dict[str, Any], spec: dict[str, Any]) -> bool:
+    """The owner's 'use anyway' covers exactly the shots they saw: any change to the shots or clips ends it."""
+    mark = video.get("footage_override")
+    return isinstance(mark, str) and bool(mark) and mark == cuts_hash(video, spec)
+
+
 def check_view(project_dir: Path, spec: dict[str, Any]) -> dict[str, Any]:
     record = load_check(project_dir)
     if record is None:
@@ -172,7 +187,7 @@ def check_view(project_dir: Path, spec: dict[str, Any]) -> dict[str, Any]:
             **rec, "cuts": cuts, "stale": rec.get("hash") != cuts_hash(current[vid], spec),
             "blocked": sum(1 for c in cuts if c.get("verdict") == "no"),
             "partly": sum(1 for c in cuts if c.get("verdict") == "partly"),
-            "override": bool(current[vid].get("footage_override")),
+            "override": override_valid(current[vid], spec),
         }
     return {"checked": True, "checked_at": record.get("checked_at"), "reviewer": record.get("reviewer"),
             "writer": record.get("writer"), "same_ai": bool(record.get("same_ai")), "videos": videos}
@@ -184,7 +199,7 @@ def render_blockers(project_dir: Path, spec: dict[str, Any], ids: list[str]) -> 
     messages = []
     for video in spec.get("videos") or []:
         vid = video.get("id")
-        if vid not in ids or not video.get("cuts") or video.get("footage_override"):
+        if vid not in ids or not video.get("cuts") or override_valid(video, spec):
             continue
         rec = view.get(vid)
         if rec is None:
@@ -195,4 +210,9 @@ def render_blockers(project_dir: Path, spec: dict[str, Any], ids: list[str]) -> 
             shots = ", ".join(str(c["index"] + 1) for c in rec["cuts"] if c.get("verdict") == "no")
             messages.append(f"{vid}: the footage check says shot {shots} does not show the subject - "
                             "replace the footage (Redo this video) or choose Use anyway")
+        else:
+            bad = [p["index"] + 1 for p in unverified_cuts(spec) if p["video"] == vid]
+            if bad:
+                messages.append(f"{vid}: shot {', '.join(map(str, bad))} is not on footage that was verified as showing the "
+                                "subject - run the footage check, or redo this video's footage")
     return messages

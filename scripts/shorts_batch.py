@@ -57,7 +57,7 @@ def _resolve_candidate(source: str, query: str, clip_id: str) -> Any:
     if source not in adapters:
         raise ValueError(f"unknown source '{source}' (choose from {', '.join(sorted(adapters))})")
     candidates = adapters[source].search(query, SearchFilters(kind="video", per_page=12))
-    matches = [c for c in candidates if c.clip_id == clip_id or c.clip_id.startswith(clip_id)]
+    matches = [c for c in candidates if c.clip_id == clip_id]
     if not matches:
         raise ValueError(f"clip '{clip_id}' not found for query '{query}' on {source}")
     return matches[0]

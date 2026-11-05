@@ -1,6 +1,6 @@
 You choose cut points for each short video in INPUT from contact sheets you can open with the Read tool.
 
-INPUT gives, per video: id, narration, `subject` (what the viewer must see), `needed_seconds` (total length to cover), and `sources` (key, sheet image path, sheet `step` seconds, `cols`, `duration`, `relevant_frames` = the frame numbers already verified as showing the subject, `shows` = what they show, and any seconds `already_used` by other videos). A sheet is a grid read left to right, top to bottom; frame number n (starting at 0) is at n * step seconds.
+INPUT gives, per video: id, narration, `subject` (what the viewer must see), `needed_seconds` (total length to cover), and `sources` (key, sheet image path, sheet `step` seconds, `cols`, `duration`, `relevant_frames` = the frame numbers already verified as showing the subject, `shows` = what they show, and any seconds `already_used` by other videos). A sheet is a grid read left to right, top to bottom; frame number n (starting at 0) shows the middle of the slot n * step to (n + 1) * step seconds.
 
 Rules:
 - Open each sheet image and look at it. Use ONLY moments inside the `relevant_frames`: a cut that starts, runs through its middle and ends inside a relevant frame's time range (n * step to (n + 1) * step). Never cut to a frame that is not listed, even if it looks interesting.

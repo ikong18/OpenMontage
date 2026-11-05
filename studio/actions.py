@@ -20,7 +20,7 @@ from lib.shorts.spec import load_spec, save_spec, validate_spec
 from studio.ai import SCHEMAS, TASK_TOOLS, AiClient
 from studio.apply import add_source, apply_cuts, apply_research, apply_scripts, apply_topics
 from studio.factcheck import apply_check, check_inputs, save_check
-from studio.footage import render_blockers
+from studio.footage import cut_is_verified, cuts_hash, override_valid, render_blockers
 from studio.footage_step import footage_plan
 from studio.jobs import JobContext
 from studio.sources import source_info
@@ -160,6 +160,10 @@ def _cover_audio(ctx: JobContext, project: Path, ids: list[str]) -> None:
         meta = info.get(last["source"])
         end = float(last["in"]) + float(last["dur"]) + delta
         room = meta is not None and end <= meta["duration"] + 0.01
+        verified = (spec.get("sources", {}).get(last["source"]) or {}).get("verified")
+        if room and not cut_is_verified({"in": last["in"], "dur": float(last["dur"]) + delta}, verified):
+            raise ValueError(f"{video['id']}: the voice is {audio:.1f} s but the footage is only {total:.1f} s and making the last "
+                             "shot longer would run into footage that was not verified; redo this video's footage")
         if room:
             identity = (spec.get("sources") or {}).get(last["source"], {}).get("clip_id")
             for other in spec["videos"]:
@@ -170,7 +174,10 @@ def _cover_audio(ctx: JobContext, project: Path, ids: list[str]) -> None:
         if not room:
             raise ValueError(f"{video['id']}: the voice is {audio:.1f} s but the footage is only {total:.1f} s and the last "
                              "shot cannot be made longer (the clip ends or the next seconds are used); redo this video's footage")
+        had_override = override_valid(video, spec)
         last["dur"] = round(float(last["dur"]) + delta, 2)
+        if had_override:
+            video["footage_override"] = cuts_hash(video, spec)  # the owner accepted this footage; the longer last shot is still in it
         changed = True
         ctx.log(f"{video['id']}: the voice is {audio:.1f} s, so the last shot was lengthened by {delta:.1f} s")
     if changed:
@@ -201,6 +208,9 @@ def _render(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
         ids = ",".join(stale)
         _check(cli.run(ctx, ["voice", str(project), "--video", ids])[0], "voice")
         _cover_audio(ctx, project, stale)
+        blockers = render_blockers(project, load_spec(project), stale)  # a lengthened shot is changed footage: it must be checked again
+        if blockers:
+            raise ValueError("; ".join(blockers))
         _check(cli.run(ctx, ["render", str(project), "--video", ids])[0], "render")
     return body
 

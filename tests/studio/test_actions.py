@@ -376,8 +376,15 @@ def _clip_project(batch, cuts, audio_seconds):
                              "url": "https://x", "mode": "fill"}}
     spec["videos"] = [{"id": "v1", "topic": "t", "hook_type": "question", "hook_text": "h?", "narration": "Words. More words.",
                        "claims": [{"text": "c", "sources": [SRC]}], "title": "T", "description": "D", "tags": ["a"],
-                       "cuts": [{"source": "s", "in": a, "dur": b} for a, b in cuts], "footage_override": True}]
+                       "cuts": [{"source": "s", "in": a, "dur": b} for a, b in cuts]}]
+    spec["sources"]["s"]["verified"] = {"match": "exact", "shows": "test pattern", "step": 4, "cols": 6, "duration": 30.0,
+                                        "relevant_frames": list(range(8)), "subject": "test pattern"}
+    spec["videos"][0]["footage_subject"] = "test pattern"
     save_spec(batch, spec)
+    from studio.footage import apply_review, save_check
+
+    save_check(batch, apply_review(spec, [{"id": "v1", "cuts": [{"index": i, "verdict": "yes", "shows": "pattern"} for i in range(len(cuts))]}],
+                                   "claude", "codex", {}))
 
     def handler(args, project):
         if args[0] == "voice":
@@ -386,12 +393,26 @@ def _clip_project(batch, cuts, audio_seconds):
 
 
 @needs_ffmpeg
-def test_render_extends_the_last_shot_when_the_new_voice_is_longer(batch):
+def test_a_longer_voice_lengthens_the_last_shot_but_the_changed_footage_must_be_checked_again(batch):
     cli = FakeCli(batch, _clip_project(batch, [(0, 5), (10, 5)], 11.0))
-    plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    with pytest.raises(ValueError, match="changed since"):
+        plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
     cuts = load_spec(batch)["videos"][0]["cuts"]
     assert sum(c["dur"] for c in cuts) >= 11.0 and cuts[0] == {"source": "s", "in": 0, "dur": 5}
-    assert cuts[1]["in"] == 10 and [c[0] for c in cli.calls] == ["voice", "render"]
+    assert cuts[1]["in"] == 10 and [c[0] for c in cli.calls] == ["voice"], "an unchecked change must not be rendered"
+
+
+@needs_ffmpeg
+def test_the_last_shot_is_never_lengthened_into_frames_that_were_not_verified(batch):
+    cli = FakeCli(batch, _clip_project(batch, [(0, 5), (13, 3)], 11.0))   # verified frames end at 12 s of the 30 s clip
+    spec = load_spec(batch)
+    spec["sources"]["s"]["verified"]["relevant_frames"] = [0, 1, 2, 3]
+    save_spec(batch, spec)
+    from studio.footage import apply_review, save_check
+
+    save_check(batch, apply_review(spec, [{"id": "v1", "cuts": [{"index": i, "verdict": "yes", "shows": "p"} for i in range(2)]}], "a", "b", {}))
+    with pytest.raises(ValueError, match="footage"):
+        plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
 
 
 @needs_ffmpeg
@@ -425,8 +446,12 @@ def test_render_only_touches_stale_videos_and_nothing_when_all_current(batch):
                              "url": "https://x", "mode": "fill"}}
     spec["videos"] = [{"id": vid, "topic": "t", "hook_type": "question", "hook_text": "h?", "narration": "Words here.",
                        "claims": [{"text": "c", "sources": [SRC]}], "title": "T", "description": "D", "tags": ["a"],
-                       "cuts": [{"source": "s", "in": 10 * i, "dur": 4}], "footage_override": True}
+                       "cuts": [{"source": "s", "in": 10 * i, "dur": 4}]}
                       for i, vid in enumerate(("v1", "v2"))]
+    from studio.footage import cuts_hash
+
+    for video in spec["videos"]:
+        video["footage_override"] = cuts_hash(video, spec)   # these tests are about which videos get rendered, not the footage check
     save_spec(batch, spec)
     (batch / "renders").mkdir(exist_ok=True)
     for vid in ("v1", "v2"):

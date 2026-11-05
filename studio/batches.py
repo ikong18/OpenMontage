@@ -17,7 +17,7 @@ PIPELINE = "shorts-factory"
 EDITABLE_FIELDS = (
     "topic", "hook_type", "hook_text", "narration", "claims", "cuts",
     "title", "description", "tags", "redo_note", "redo_avoid", "topic_sources",
-    "footage_subject", "footage_override",
+    "footage_subject", "footage_stand_ins",
 )
 
 
