@@ -130,7 +130,11 @@ def edit_videos(project_dir: Path, videos: list[dict[str, Any]], stage: str) -> 
             item["claims"] = [{"text": item.get("topic"), "sources": [str(s) for s in item.get("topic_sources") or []]}]
         cleaned.append(item)
     spec["videos"] = cleaned
-    violations = validate_spec(spec, project_dir, stage)
+    violations = validate_spec(spec, project_dir, "idea" if stage == "draft" else stage)
+    if stage == "draft":
+        # a typed topic is saved before it is researched: only completeness checks are skipped
+        violations = [v for v in violations if not (
+            v.endswith(("missing hook_type", "missing hook_text", "missing claims")) or "claim has no http(s) source" in v)]
     if violations:
         return violations
     save_spec(project_dir, spec)

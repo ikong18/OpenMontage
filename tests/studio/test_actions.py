@@ -436,3 +436,32 @@ def test_render_only_touches_stale_videos_and_nothing_when_all_current(batch):
     cli = FakeCli(batch)
     plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
     assert cli.calls == []
+
+
+# ---- research through the topics step (control flow only; real AI is checked in tests/real_ai) --------
+
+
+def test_topics_research_fills_typed_topics_and_leaves_the_rest(batch):
+    spec = load_spec(batch)
+    spec["videos"] = [{"id": "v1", "topic": "Venus is hotter than Mercury"}, {"id": "v2", "topic": "keep me"}]
+    save_spec(batch, spec)
+    ai = FakeAi({"topic_research": {"items": [{"id": "v1", "topic": "Venus is hotter than Mercury",
+                                               "hook_type": "comparison", "hook_text": "Venus beats Mercury.",
+                                               "sources": [SRC]}]}})
+    plan_for("topics", batch, ai, {"research": ["v1"], "theme": "space"}, FakeCli(batch))(_ctx(batch))
+    saved = load_spec(batch)["videos"]
+    assert saved[0]["topic_sources"] == [SRC] and saved[1] == {"id": "v2", "topic": "keep me"}
+    call = ai.calls[0]
+    assert call["task"] == "topic_research" and call["tools"] == ["WebFetch", "WebSearch"]
+    assert [v["id"] for v in call["inputs"]["videos"]] == ["v1"]
+
+
+def test_topics_research_ai_failure_leaves_spec_unchanged(batch):
+    spec = load_spec(batch)
+    spec["videos"] = [{"id": "v1", "topic": "typed"}]
+    save_spec(batch, spec)
+    before = (batch / "artifacts" / "batch_spec.json").read_bytes()
+    with pytest.raises(AiError):
+        plan_for("topics", batch, FakeAi({"topic_research": AiError("offline")}), {"research": ["v1"]},
+                 FakeCli(batch))(_ctx(batch))
+    assert (batch / "artifacts" / "batch_spec.json").read_bytes() == before

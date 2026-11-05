@@ -5,8 +5,10 @@ The AI never writes project files and never approves anything; Studio validates 
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -57,11 +59,19 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     }),
 }
 
+SCHEMAS["topic_research"] = _wrap({
+    "type": "object",
+    "properties": {"id": _STR, "topic": _STR, "hook_type": {"type": "string", "enum": HOOKS}, "hook_text": _STR,
+                   "sources": _STRS},
+    "required": ["id", "topic", "hook_type", "hook_text", "sources"],
+})
+
 TASK_TOOLS: dict[str, list[str]] = {
     "topics": ["WebFetch", "WebSearch"],
     "scripts": ["WebFetch"],
     "footage_queries": [],
     "footage_cuts": ["Read"],
+    "topic_research": ["WebFetch", "WebSearch"],
 }
 
 
@@ -118,6 +128,74 @@ class ClaudeCli:
         if not isinstance(out, dict):
             raise AiError("claude returned no structured answer")
         return out
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Codex wants every property required and no extra properties; returns a strict copy."""
+    out = copy.deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" and isinstance(node.get("properties"), dict):
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(out)
+    return out
+
+
+class CodexCli:
+    """The same job as ClaudeCli, through `codex exec` (read-only, no saved session)."""
+
+    def __init__(self, work_dir: Path, binary: str = "codex", timeout: int = 900):
+        self.work_dir = Path(work_dir)
+        self.binary = binary
+        self.timeout = timeout
+
+    def run(self, task: str, inputs: dict[str, Any], schema: dict[str, Any], tools: list[str],
+            add_dirs: list[Path] | None = None) -> dict[str, Any]:
+        prompt = (PROMPTS / f"{task}.md").read_text(encoding="utf-8")
+        text = (f"{prompt}\n\nWhen a page matters, open it with your web tool; never answer from memory.\n"
+                f"\nINPUT:\n{json.dumps(inputs, indent=2, ensure_ascii=False)}\n")
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4().hex[:10]
+        schema_path = self.work_dir / f"schema_{run_id}.json"
+        out_path = self.work_dir / f"answer_{run_id}.json"
+        schema_path.write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
+        argv = [self.binary, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
+                "-C", str(self.work_dir), "--output-schema", str(schema_path), "-o", str(out_path)]
+        for source in inputs.get("sources") or []:
+            if isinstance(source, dict) and source.get("sheet"):
+                argv += ["-i", str(source["sheet"])]
+        argv.append("-")
+        try:
+            proc = subprocess.run(argv, input=text, cwd=str(self.work_dir), capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=self.timeout)
+            if proc.returncode != 0:
+                tail = " | ".join((proc.stderr or proc.stdout or "").strip().splitlines()[-3:])
+                raise AiError(f"codex failed (exit {proc.returncode}): {tail[:300]}")
+            try:
+                answer = json.loads(out_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise AiError("codex returned no answer") from exc
+            if not isinstance(answer, dict):
+                raise AiError("codex returned no answer")
+            return answer
+        except FileNotFoundError as exc:
+            raise AiError("codex CLI not found - install it and sign in") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise AiError(f"codex timed out after {self.timeout} s") from exc
+        finally:
+            for path in (schema_path, out_path):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 class FakeAi:

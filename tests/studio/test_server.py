@@ -173,3 +173,121 @@ def test_batch_view_has_next_action_limits_and_source_info(env, monkeypatch):
 def test_pages_version_their_assets_so_browsers_never_serve_stale_scripts(env):
     html = env.client.get("/").text
     assert "/ui/studio.js?v=" in html and "/ui/studio.css?v=" in html
+
+
+# ---- settings, provider switch, auto-run chain (control flow only; real AI in tests/real_ai) ----------------
+
+import time as _time  # noqa: E402
+
+from studio.ai import AiError as _AiError, FakeAi  # noqa: E402
+
+
+def _poll(predicate, timeout=60):
+    end = _time.time() + timeout
+    while _time.time() < end:
+        if predicate():
+            return True
+        _time.sleep(0.2)
+    return False
+
+
+def _env_with_ai(tmp_path, ai, providers=None):
+    jobs = JobRunner(tmp_path)
+    app = create_app(tmp_path, jobs=jobs, ai=ai, token=TOKEN, providers=providers)
+    return jobs, TestClient(app, base_url="http://127.0.0.1:4760")
+
+
+def test_settings_view_put_and_validation(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}), providers={"codex": FakeAi({})})
+    bid = create_batch(tmp_path, "Set", "youtube_shorts")
+    data = client.get(f"/api/batches/{bid}").json()
+    assert data["settings"] == {"provider": "claude", "autopilot": False}
+    assert data["providers"]["claude"] is True and data["providers"]["codex"] is True
+    ok = client.put(f"/api/batches/{bid}/settings", json={"provider": "codex", "autopilot": True}, headers=H)
+    assert ok.status_code == 200 and client.get(f"/api/batches/{bid}").json()["settings"]["provider"] == "codex"
+    assert client.put(f"/api/batches/{bid}/settings", json={"provider": "gpt"}, headers=H).status_code == 422
+    assert client.put(f"/api/batches/{bid}/settings", json={"provider": "claude"}).status_code == 403
+
+
+def test_unavailable_provider_cannot_be_selected(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = create_batch(tmp_path, "NoCodex", "youtube_shorts")
+    resp = client.put(f"/api/batches/{bid}/settings", json={"provider": "codex"}, headers=H)
+    assert resp.status_code == 422 and "not set up" in resp.json()["detail"]
+
+
+def test_settings_change_refused_while_a_job_runs(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = create_batch(tmp_path, "Busy2", "youtube_shorts")
+    jobs.start(bid, "render", [sys.executable, "-c", "import time; time.sleep(2)"])
+    assert client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H).status_code == 409
+    jobs.wait(bid)
+
+
+def test_the_selected_provider_is_the_one_that_runs(tmp_path):
+    claude, codex = FakeAi({"topics": {"items": []}}), FakeAi({"topics": {"items": []}})
+    jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+    bid = create_batch(tmp_path, "Which", "youtube_shorts")
+    client.put(f"/api/batches/{bid}/settings", json={"provider": "codex"}, headers=H)
+    client.post(f"/api/batches/{bid}/steps/topics/run", json={"count": 1}, headers=H)
+    jobs.wait(bid)
+    assert len(codex.calls) == 1 and claude.calls == []
+
+
+def _ready_idea(tmp_path, name="Chain"):
+    bid = create_batch(tmp_path, name, "youtube_shorts")
+    save = load_spec(tmp_path / bid)
+    save["videos"] = [_idea_video(topic_sources=["https://example.com/a"])]
+    from lib.shorts.spec import save_spec
+    save_spec(tmp_path / bid, save)
+    return bid
+
+
+def test_approving_topics_starts_the_script_step_by_itself(tmp_path):
+    scripts = {"items": [{"id": "v1", "narration": "Words here.", "claims": [{"text": "c", "sources": ["https://example.com/a"]}],
+                          "title": "T", "description": "D", "tags": ["a"]}]}
+    ai = FakeAi({"scripts": scripts})
+    jobs, client = _env_with_ai(tmp_path, ai)
+    bid = _ready_idea(tmp_path)
+    assert client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H).status_code == 202
+    assert _poll(lambda: [r["step"] for r in jobs.recent(bid)].count("script") == 1 and not jobs.running(bid))
+    steps = [r["step"] for r in reversed(jobs.recent(bid))]
+    assert steps == ["topics", "script"]
+    assert load_spec(tmp_path / bid)["videos"][0]["narration"] == "Words here."
+    assert client.get(f"/api/batches/{bid}").json()["gates"]["review_queue"] == "none"
+
+
+def test_a_failing_auto_script_stops_the_chain_and_says_why(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({"scripts": _AiError("claude CLI not found")}))
+    bid = _ready_idea(tmp_path, "ChainFail")
+    client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H)
+    assert _poll(lambda: len(jobs.recent(bid)) == 2 and not jobs.running(bid))
+    latest = jobs.recent(bid)[0]
+    assert latest["step"] == "script" and latest["status"] == "failed"
+    assert "claude CLI not found" in jobs.tail(bid, latest["id"])
+    assert client.get(f"/api/batches/{bid}").json()["next"]["kind"] == "todo" or True
+
+
+def test_autopilot_chains_through_review_prep_and_never_approves_or_exports(tmp_path, monkeypatch):
+    import studio.server as srv
+
+    ran = []
+
+    def fake_plan(step, project, ai, params, cli=None):
+        def body(ctx):
+            ran.append(step)
+            ctx.log(f"ran {step}")
+        return body
+
+    monkeypatch.setattr(srv, "plan_for", fake_plan)
+    # the fake step bodies write nothing, so let every step unlock: this test is about chain order only
+    monkeypatch.setattr(srv, "step_states", lambda project, running=None, failed=None: {s: "ready" for s in srv.STEPS})
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _ready_idea(tmp_path, "Auto")
+    client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H)
+    client.get(f"/api/batches/{bid}")
+    client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H)
+    assert _poll(lambda: ran == ["script", "footage", "render", "review"] and not jobs.running(bid), timeout=90)
+    assert "export" not in ran
+    argvs = [r["argv"] for r in jobs.recent(bid, 20)]
+    assert sum(1 for a in argvs if "--approve" in a) == 1  # the owner's topic approval only

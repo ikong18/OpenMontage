@@ -18,7 +18,7 @@ from typing import Any, Callable
 from lib.shorts.batch import read_batch, render_fingerprint
 from lib.shorts.spec import load_spec, save_spec, validate_spec
 from studio.ai import SCHEMAS, TASK_TOOLS, AiClient
-from studio.apply import add_source, apply_cuts, apply_scripts, apply_topics
+from studio.apply import add_source, apply_cuts, apply_research, apply_scripts, apply_topics
 from studio.jobs import JobContext
 from studio.steps import gate_status, step_states
 
@@ -61,7 +61,28 @@ def _safe_key(clip_id: str) -> str:
 # ---- topics and script -------------------------------------------------------
 
 
+def _research(project: Path, ai: AiClient, params: dict[str, Any]) -> Callable[[JobContext], None]:
+    def body(ctx: JobContext) -> None:
+        spec = load_spec(project)
+        ids = [str(i) for i in params.get("research") or []]
+        videos = [v for v in spec.get("videos") or [] if v.get("id") in ids]
+        unknown = [i for i in ids if i not in {v.get("id") for v in videos}]
+        if unknown:
+            raise ValueError(f"unknown video id '{unknown[0]}'")
+        ctx.log(f"asking the AI to research {len(videos)} topic(s) and find sources ...")
+        result = ai.run("topic_research", {
+            "theme": str(params.get("theme") or "space facts"),
+            "videos": [{k: v.get(k) for k in ("id", "topic", "hook_type", "hook_text")} for v in videos],
+        }, SCHEMAS["topic_research"], TASK_TOOLS["topic_research"])
+        save_spec(project, apply_research(spec, result.get("items") or [], ids, project))
+        ctx.log("saved sources, hook type and first sentence - check them, then approve")
+    return body
+
+
 def _topics(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Callable[[JobContext], None]:
+    if params.get("research"):
+        return _research(project, ai, params)
+
     def body(ctx: JobContext) -> None:
         spec = load_spec(project)
         count = max(1, min(int(params.get("count") or 5), 12))

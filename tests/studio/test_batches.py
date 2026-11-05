@@ -137,3 +137,19 @@ def test_list_batches_newest_activity_first(tmp_path):
     os.utime(tmp_path / a / "project.json", (1000, 1000))
     os.utime(tmp_path / a / "artifacts" / "batch_spec.json", (1000, 1000))
     assert [r["id"] for r in list_batches(tmp_path)] == [b, a]
+
+
+# ---- draft saves (typed topics that are not researched yet) -----------------------
+
+
+def test_draft_stage_saves_incomplete_topics(tmp_path):
+    bid = create_batch(tmp_path, "Draft", "youtube_shorts")
+    assert edit_videos(tmp_path / bid, [{"id": "v1", "topic": "just typed"}], "draft") == []
+    assert load_spec(tmp_path / bid)["videos"][0]["topic"] == "just typed"
+
+
+def test_draft_stage_still_rejects_real_errors(tmp_path):
+    bid = create_batch(tmp_path, "Draft2", "youtube_shorts")
+    assert edit_videos(tmp_path / bid, [{"id": "../x", "topic": "t"}], "draft")
+    assert edit_videos(tmp_path / bid, [{"id": "v1", "topic": "t", "hook_type": "bogus"}], "draft")
+    assert edit_videos(tmp_path / bid, [{"id": "v1", "topic": "a"}, {"id": "v1", "topic": "b"}], "draft")

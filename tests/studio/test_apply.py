@@ -139,3 +139,41 @@ def test_apply_topics_rejects_any_non_http_source(batch):
     bad[0]["sources"] = [SRC, "file:///etc/passwd"]
     with pytest.raises(ValueError, match="file:"):
         apply_topics(load_spec(batch), bad, 1, batch)
+
+
+# ---- research (typed topics) ------------------------------------------------------
+
+from studio.apply import apply_research  # noqa: E402
+
+
+def _typed(batch, *topics):
+    spec = load_spec(batch)
+    spec["videos"] = [{"id": f"v{i}", "topic": t} for i, t in enumerate(topics, 1)]
+    return spec
+
+
+def _found(vid, **extra):
+    base = {"id": vid, "topic": "Corrected topic", "hook_type": "question", "hook_text": "Is it so?", "sources": [SRC]}
+    base.update(extra)
+    return base
+
+
+def test_apply_research_fills_only_the_researched_videos(batch):
+    spec = _typed(batch, "typed one", "typed two")
+    out = apply_research(spec, [_found("v2")], ["v2"], batch)
+    assert out["videos"][0] == {"id": "v1", "topic": "typed one"}
+    v2 = out["videos"][1]
+    assert v2["topic"] == "Corrected topic" and v2["topic_sources"] == [SRC]
+    assert v2["claims"] == [{"text": "Corrected topic", "sources": [SRC]}]
+
+
+def test_apply_research_requires_every_asked_id_and_http_sources(batch):
+    spec = _typed(batch, "a", "b")
+    with pytest.raises(ValueError, match="v2"):
+        apply_research(spec, [_found("v1")], ["v1", "v2"], batch)
+    with pytest.raises(ValueError, match="http"):
+        apply_research(spec, [_found("v1", sources=["ftp://x"])], ["v1"], batch)
+    with pytest.raises(ValueError, match="hook_type"):
+        apply_research(spec, [_found("v1", hook_type="clickbait")], ["v1"], batch)
+    with pytest.raises(ValueError, match="v9"):
+        apply_research(spec, [_found("v9")], ["v9"], batch)

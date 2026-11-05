@@ -104,7 +104,7 @@ def test_fake_ai_returns_and_raises_configured():
 
 
 def test_every_task_has_prompt_schema_and_tools():
-    for task in ("topics", "scripts", "footage_queries", "footage_cuts"):
+    for task in ("topics", "scripts", "footage_queries", "footage_cuts", "topic_research"):
         assert (REPO / "studio" / "prompts" / f"{task}.md").read_text(encoding="utf-8").strip()
         schema = SCHEMAS[task]
         assert schema["type"] == "object" and schema["required"] == ["items"]
@@ -124,3 +124,57 @@ def test_strict_mcp_config_so_user_mcp_servers_are_not_offered(monkeypatch, tmp_
     seen = _fake_run(monkeypatch, stdout=_ok({"items": []}))
     ClaudeCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
     assert "--strict-mcp-config" in seen["argv"]
+
+
+# ---- Codex client: how the command is built (what the AI says is checked by tests/real_ai) -------
+
+from studio.ai import CodexCli, strict_schema  # noqa: E402
+
+
+def test_strict_schema_requires_every_property_and_forbids_extras():
+    out = strict_schema(SCHEMAS["scripts"])
+    item = out["properties"]["items"]["items"]
+    assert out["additionalProperties"] is False and item["additionalProperties"] is False
+    assert sorted(item["required"]) == sorted(item["properties"])
+    claim = item["properties"]["claims"]["items"]
+    assert claim["additionalProperties"] is False
+    assert SCHEMAS["scripts"] is not out  # input is not mutated
+    assert "additionalProperties" not in SCHEMAS["scripts"]["properties"]["items"]["items"]
+
+
+def test_codex_command_line(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen["argv"], seen["kwargs"] = argv, kwargs
+        out = Path(argv[argv.index("-o") + 1])
+        seen["schema"] = json.loads(Path(argv[argv.index("--output-schema") + 1]).read_text(encoding="utf-8"))
+        out.write_text(json.dumps({"items": [{"a": 1}]}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ai_module.subprocess, "run", fake)
+    sheet = tmp_path / "s.png"
+    sheet.write_bytes(b"x")
+    work = tmp_path / "work"
+    out = CodexCli(work).run("footage_cuts", {"sources": [{"key": "a", "sheet": str(sheet)}]}, SCHEMAS["footage_cuts"], ["Read"])
+    argv = seen["argv"]
+    assert out == {"items": [{"a": 1}]}
+    assert argv[:2] == ["codex", "exec"] and "--ephemeral" in argv and "--skip-git-repo-check" in argv
+    assert argv[argv.index("-s") + 1] == "read-only"
+    assert Path(argv[argv.index("-C") + 1]) == work
+    assert argv[argv.index("-i") + 1] == str(sheet) and argv[-1] == "-"
+    assert seen["schema"]["additionalProperties"] is False
+    assert not list(work.glob("schema_*.json")) and not list(work.glob("answer_*.json"))  # temp files cleaned up
+    assert "INPUT:" in seen["kwargs"]["input"] and Path(seen["kwargs"]["cwd"]) == work
+
+
+def test_codex_errors_are_readable(monkeypatch, tmp_path):
+    monkeypatch.setattr(ai_module.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("codex")))
+    with pytest.raises(AiError, match="codex CLI not found"):
+        CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    monkeypatch.setattr(ai_module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="auth failed"))
+    with pytest.raises(AiError, match="auth failed"):
+        CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    monkeypatch.setattr(ai_module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    with pytest.raises(AiError, match="no answer"):
+        CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])

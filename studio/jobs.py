@@ -135,7 +135,8 @@ class JobRunner:
                 pass
 
     # ---- launching -------------------------------------------------------
-    def _launch(self, batch_id: str, step: str, argv: list[str], body: Callable[[JobContext], int | None]) -> str:
+    def _launch(self, batch_id: str, step: str, argv: list[str], body: Callable[[JobContext], int | None],
+                on_success: Callable[[], None] | None = None) -> str:
         with self._lock:
             if batch_id in self._running:
                 raise JobBusy(f"a job is already running for {batch_id}")
@@ -164,17 +165,24 @@ class JobRunner:
             with self._lock:
                 self._running.pop(batch_id, None)
             self._publish({"batch_id": batch_id, "job_id": job_id, "status": status})
+            if status == "ok" and on_success is not None:
+                try:
+                    on_success()
+                except Exception as exc:  # noqa: BLE001 - a stopped chain is reported in the finished job's log
+                    ctx.log(f"next step did not start: {exc}")
 
         thread = threading.Thread(target=work, name=f"studio-job-{job_id}", daemon=True)
         self._threads[batch_id] = thread
         thread.start()
         return job_id
 
-    def start(self, batch_id: str, step: str, argv: list[str], cwd: Path | None = None) -> str:
-        return self._launch(batch_id, step, argv, lambda ctx: ctx.run(argv, cwd=cwd))
+    def start(self, batch_id: str, step: str, argv: list[str], cwd: Path | None = None,
+              on_success: Callable[[], None] | None = None) -> str:
+        return self._launch(batch_id, step, argv, lambda ctx: ctx.run(argv, cwd=cwd), on_success)
 
-    def run_steps(self, batch_id: str, step: str, plan: Callable[[JobContext], None]) -> str:
-        return self._launch(batch_id, step, [f"<{step}>"], plan)
+    def run_steps(self, batch_id: str, step: str, plan: Callable[[JobContext], None],
+                  on_success: Callable[[], None] | None = None) -> str:
+        return self._launch(batch_id, step, [f"<{step}>"], plan, on_success)
 
     def wait(self, batch_id: str, timeout: float = 30) -> None:
         thread = self._threads.get(batch_id)

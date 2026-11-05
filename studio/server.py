@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -20,6 +21,7 @@ from studio.actions import AI_STEPS, REPO, approval_argv, plan_for, redo_video
 from studio.ai import AiClient
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
+from studio.settings import PROVIDERS, load_settings, save_settings
 from studio.sources import source_info
 from studio.steps import STEPS, gate_status, next_action, step_states
 
@@ -36,8 +38,12 @@ def create_app(
     jobs: Optional[JobRunner] = None,
     ai: Optional[AiClient] = None,
     token: Optional[str] = None,
+    providers: Optional[dict[str, AiClient]] = None,
 ) -> FastAPI:
     projects_dir = Path(projects_dir)
+    clients: dict[str, AiClient] = dict(providers or {})
+    if ai is not None:
+        clients.setdefault("claude", ai)
     jobs = jobs or JobRunner(projects_dir)
     token = token or secrets.token_urlsafe(24)
 
@@ -49,6 +55,7 @@ def create_app(
     app = FastAPI(title="Studio", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     app.state.projects_dir, app.state.jobs, app.state.ai, app.state.token = projects_dir, jobs, ai, token
+    app.state.clients = clients
 
     def require_token(x_studio_token: Optional[str] = Header(default=None)) -> None:
         if not x_studio_token or not secrets.compare_digest(x_studio_token, token):
@@ -59,6 +66,53 @@ def create_app(
             return batch_dir(projects_dir, batch_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="no such batch") from None
+
+    def provider_ready(name: str) -> bool:
+        client = clients.get(name)
+        if client is None:
+            return False
+        binary = getattr(client, "binary", None)
+        return shutil.which(binary) is not None if binary else True
+
+    def ai_for(project: Path) -> Optional[AiClient]:
+        return clients.get(load_settings(project)["provider"])
+
+    class StepError(Exception):
+        def __init__(self, status: int, detail: str):
+            super().__init__(detail)
+            self.status, self.detail = status, detail
+
+    CHAIN = {"script": "footage", "footage": "render", "render": "review"}
+
+    def chain_after(batch_id: str, step: str, project: Path):
+        """After a step succeeds and autopilot is on, start the next one (never approvals, never export)."""
+        nxt = CHAIN.get(step)
+        if nxt is None:
+            return None
+
+        def go() -> None:
+            if load_settings(project)["autopilot"]:
+                start_step(batch_id, nxt, {})
+        return go
+
+    def start_step(batch_id: str, step: str, params: dict[str, Any]) -> str:
+        project = project_or_404(batch_id)
+        if step not in STEPS:
+            raise StepError(404, f"unknown step '{step}'")
+        if jobs.running(batch_id):
+            raise StepError(409, "a job is already running for this batch")
+        if step_states(project)[step] == "locked":
+            raise StepError(422, f"step '{step}' is locked until the previous step is done")
+        if step == "topics" and gate_status(project, "idea") == "approved":
+            raise StepError(409, "topics are already approved; start a new batch")
+        client = ai_for(project)
+        if step in AI_STEPS and client is None:
+            raise StepError(503, "no AI client is configured for this server")
+        try:
+            return jobs.run_steps(batch_id, step, plan_for(step, project, client, params),
+                                  on_success=chain_after(batch_id, step, project))
+        except JobBusy:
+            raise StepError(409, "a job is already running for this batch") from None
 
     def page(name: str) -> HTMLResponse:
         html = (UI_DIR / name).read_text(encoding="utf-8").replace("__STUDIO_TOKEN__", token)
@@ -88,6 +142,8 @@ def create_app(
             "spec": spec,
             "steps": steps,
             "gates": gates,
+            "settings": load_settings(project),
+            "providers": {name: provider_ready(name) for name in PROVIDERS},
             "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id),
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
             "source_info": source_info(project, spec),
@@ -139,8 +195,8 @@ def create_app(
     @app.put("/api/batches/{batch_id}/spec", dependencies=[Depends(require_token)])
     async def put_spec(batch_id: str, body: dict, stage: str = "idea") -> dict:
         project = project_or_404(batch_id)
-        if stage not in STAGES:
-            raise HTTPException(status_code=422, detail=f"stage must be one of {', '.join(STAGES)}")
+        if stage not in STAGES + ("draft",):
+            raise HTTPException(status_code=422, detail=f"stage must be one of {', '.join(STAGES + ('draft',))}")
         if jobs.running(batch_id):
             raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
         videos = body.get("videos")
@@ -185,22 +241,24 @@ def create_app(
 
     @app.post("/api/batches/{batch_id}/steps/{step}/run", status_code=202, dependencies=[Depends(require_token)])
     async def run_step(batch_id: str, step: str, body: dict = Body(default_factory=dict)) -> dict:
-        project = project_or_404(batch_id)
-        if step not in STEPS:
-            raise HTTPException(status_code=404, detail=f"unknown step '{step}'")
-        if jobs.running(batch_id):
-            raise HTTPException(status_code=409, detail="a job is already running for this batch")
-        if step_states(project)[step] == "locked":
-            raise HTTPException(status_code=422, detail=f"step '{step}' is locked until the previous step is done")
-        if step == "topics" and gate_status(project, "idea") == "approved":
-            raise HTTPException(status_code=409, detail="topics are already approved; start a new batch")
-        if step in AI_STEPS and ai is None:
-            raise HTTPException(status_code=503, detail="no AI client is configured for this server")
+        project_or_404(batch_id)
         try:
-            job_id = jobs.run_steps(batch_id, step, plan_for(step, project, ai, body))
-        except JobBusy:
-            raise HTTPException(status_code=409, detail="a job is already running for this batch") from None
-        return {"job": job_id}
+            return {"job": start_step(batch_id, step, body)}
+        except StepError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+
+    @app.put("/api/batches/{batch_id}/settings", dependencies=[Depends(require_token)])
+    async def put_settings(batch_id: str, body: dict = Body(default_factory=dict)) -> dict:
+        project = project_or_404(batch_id)
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        wanted = body.get("provider")
+        if wanted in PROVIDERS and not provider_ready(wanted):
+            raise HTTPException(status_code=422, detail=f"{wanted} is not set up on this server (CLI not installed)")
+        try:
+            return save_settings(project, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
     @app.post("/api/batches/{batch_id}/gates/{gate}/approve", status_code=202, dependencies=[Depends(require_token)])
     async def approve(batch_id: str, gate: str) -> dict:
@@ -210,7 +268,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         try:
-            job_id = jobs.start(batch_id, "topics" if gate == "idea" else "review", argv, cwd=REPO)
+            after = None
+            if gate == "idea":
+                def after() -> None:  # approving topics starts the scripts by itself
+                    start_step(batch_id, "script", {})
+            job_id = jobs.start(batch_id, "topics" if gate == "idea" else "review", argv, cwd=REPO, on_success=after)
         except JobBusy:
             raise HTTPException(status_code=409, detail="a job is already running for this batch") from None
         return {"job": job_id}

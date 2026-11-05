@@ -55,11 +55,12 @@ def default_work_dir() -> Path:
 
 
 def build_app(projects_dir: Path = PROJECTS_DIR, work_dir: Path | None = None):
-    from studio.ai import ClaudeCli
+    from studio.ai import ClaudeCli, CodexCli
     from studio.server import create_app
 
     projects_dir = Path(projects_dir)
-    return create_app(projects_dir, ai=ClaudeCli(Path(work_dir) if work_dir else default_work_dir()))
+    work = Path(work_dir) if work_dir else default_work_dir()
+    return create_app(projects_dir, ai=ClaudeCli(work), providers={"codex": CodexCli(work)})
 
 
 def cmd_open(batch_id: str | None) -> int:

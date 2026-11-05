@@ -144,3 +144,43 @@ def test_events_published_to_subscribers(tmp_path):
 
     seen = asyncio.run(scenario())
     assert seen[0] == "running" and seen[-1] == "ok"
+
+
+# ---- chaining: a job can start the next one only when it succeeded ---------------------
+
+
+def test_on_success_runs_after_ok_job_and_can_start_the_next(tmp_path):
+    runner = JobRunner(tmp_path)
+    order = []
+
+    def second():
+        order.append("second-start")
+        runner.start("b1", "script", [PY, "-c", "print('two')"])
+
+    runner.start("b1", "topics", [PY, "-c", "print('one')"], on_success=second)
+    deadline = __import__("time").time() + 30
+    while __import__("time").time() < deadline and len(runner.recent("b1")) < 2:
+        __import__("time").sleep(0.1)
+    runner.wait("b1")
+    steps = [r["step"] for r in runner.recent("b1")]
+    assert order == ["second-start"] and set(steps) == {"topics", "script"}
+
+
+def test_on_success_not_called_when_job_fails(tmp_path):
+    runner = JobRunner(tmp_path)
+    called = []
+    runner.start("b1", "topics", [PY, "-c", "import sys; sys.exit(1)"], on_success=lambda: called.append(1))
+    _wait(runner, "b1")
+    assert called == []
+
+
+def test_on_success_error_is_written_to_the_finished_jobs_log(tmp_path):
+    runner = JobRunner(tmp_path)
+
+    def boom():
+        raise RuntimeError("cannot continue")
+
+    job = runner.start("b1", "topics", [PY, "-c", "print('ok')"], on_success=boom)
+    _wait(runner, "b1")
+    assert "cannot continue" in runner.tail("b1", job)
+    assert runner.recent("b1")[0]["status"] == "ok"

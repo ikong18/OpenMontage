@@ -88,3 +88,28 @@ def add_source(spec: dict[str, Any], key: str, entry: dict[str, Any], width: int
         mode = "fill"
     sources[key] = {**entry, "mode": mode}
     return out
+
+
+def apply_research(spec: dict[str, Any], items: list[dict[str, Any]], ids: list[str], project_dir: Path) -> dict[str, Any]:
+    """Fill the typed topics `ids` from the AI's research; only those videos have to be complete."""
+    out = copy.deepcopy(spec)
+    by_id = {v.get("id"): v for v in out.get("videos") or []}
+    for vid in ids:
+        if vid not in by_id:
+            raise ValueError(f"unknown video id '{vid}'")
+    found = {i.get("id"): i for i in items}
+    missing = [vid for vid in ids if vid not in found]
+    if missing:
+        raise ValueError(f"no research returned for {', '.join(missing)}")
+    for vid in ids:
+        item = found[vid]
+        sources = [str(s) for s in item.get("sources") or []]
+        _http_only(sources, vid)
+        by_id[vid].update({
+            "topic": item.get("topic"), "hook_type": item.get("hook_type"), "hook_text": item.get("hook_text"),
+            "topic_sources": sources, "claims": [{"text": item.get("topic"), "sources": sources}],
+        })
+    check = copy.deepcopy(out)
+    check["videos"] = [v for v in check["videos"] if v["id"] in ids]
+    _check(check, project_dir, "idea")
+    return out

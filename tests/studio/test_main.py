@@ -81,3 +81,12 @@ def test_open_when_ready_gives_up_without_opening(monkeypatch):
 
 def test_serve_parser_accepts_open_flag():
     assert cli.build_parser().parse_args(["serve", "--open"]).open is True
+
+
+def test_build_app_offers_claude_and_codex(tmp_path):
+    from studio.ai import CodexCli
+
+    app = cli.build_app(tmp_path, work_dir=tmp_path / "w")
+    clients = app.state.clients
+    assert isinstance(clients["claude"], ClaudeCli) and isinstance(clients["codex"], CodexCli)
+    assert clients["claude"].work_dir == clients["codex"].work_dir == tmp_path / "w"
