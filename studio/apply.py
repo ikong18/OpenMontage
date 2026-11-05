@@ -71,7 +71,8 @@ def apply_cuts(spec: dict[str, Any], items: list[dict[str, Any]], project_dir: P
         if vid not in by_id:
             raise ValueError(f"the AI returned cuts for unknown video id '{vid}'")
         by_id[vid]["cuts"] = [
-            {"source": c.get("source"), "in": c.get("in"), "dur": c.get("dur")} for c in item.get("cuts") or []
+            {"source": c.get("source"), "in": c.get("in"), "dur": c.get("dur"), **({"shows": c["shows"]} if c.get("shows") else {})}
+            for c in item.get("cuts") or []
         ]
     return _check(out, project_dir, "visuals")
 

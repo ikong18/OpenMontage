@@ -433,6 +433,46 @@ function initBatch() {
     return bar;
   }
 
+  const SHOT_LABEL = { yes: "shows the subject", partly: "only partly", no: "does NOT show the subject" };
+
+  /* What the footage really shows: one real frame per shot, what the reviewing AI saw there, and its verdict. */
+  function footageEvidence(v) {
+    const check = ((data.footage_check || {}).videos || {})[v.id];
+    const sources = (data.spec.sources) || {};
+    const used = [...new Set((v.cuts || []).map((c) => c.source))].filter((k) => sources[k]);
+    const rows = [h("div", { class: "muted small" }, "What the footage shows:")];
+    used.forEach((k) => {
+      const ver = sources[k].verified;
+      rows.push(h("div", { class: "small" },
+        ver ? h("span", { class: "verdict " + (ver.match === "exact" ? "supported" : "partly") }, ver.match === "exact" ? "exact match" : "illustrative (related)") : h("span", { class: "verdict unverifiable" }, "not verified"),
+        " ", ver ? ver.shows : "this clip was chosen before footage was verified", sources[k].url ? [" - ", h("span", { class: "muted" }, sources[k].license || "")] : null));
+    });
+    if (!check) {
+      rows.push(h("div", { class: "counter warn" }, "Not checked yet - a second AI has not looked at this video's shots. It cannot be rendered until it has."));
+    } else if (check.stale) {
+      rows.push(h("div", { class: "counter warn" }, "The footage changed after it was checked - check it again."));
+    } else {
+      rows.push(h("div", { class: "muted small" }, `Checked by ${check.reviewer}` + (check.same_ai ? " (the same AI that chose the footage - a different one would be a stronger check)" : "") + "."));
+      const grid = h("div", { class: "shots" });
+      (check.cuts || []).forEach((c) => grid.append(h("figure", { class: "shot " + c.verdict },
+        c.frame ? h("img", { src: `/media/${encodeURIComponent(batchId)}/${c.frame}?v=${encodeURIComponent(check.checked_at || "")}`, alt: `shot ${c.index + 1}` }) : null,
+        h("figcaption", {}, h("span", { class: "verdict " + (c.verdict === "yes" ? "supported" : c.verdict === "partly" ? "partly" : "unsupported") }, `${c.index + 1}: ${SHOT_LABEL[c.verdict] || c.verdict}`),
+          h("div", { class: "muted small" }, c.shows)))));
+      rows.push(grid);
+      if (check.blocked) {
+        rows.push(h("div", { class: "error" }, `${check.blocked} shot(s) do not show the subject. This video will not be rendered with them.`));
+        rows.push(h("div", { class: "row" },
+          actionButton("Redo this video", () => {
+            if (confirm(`Redo ${v.id}? Its cuts and render are cleared and new footage is searched.`)) action(() => api("POST", `${base}/videos/${encodeURIComponent(v.id)}/redo`, { note: "the footage check says shots do not show the subject" }));
+          }, !busy(), "primary", reasonFor(null)),
+          check.override ? h("span", { class: "muted" }, "You chose to use this footage anyway.") : actionButton("Use anyway", () => {
+            if (confirm(`Use ${v.id}'s footage although ${check.blocked} shot(s) do not show the subject? The video may show something unrelated to what it says.`)) action(() => api("POST", `${base}/videos/${encodeURIComponent(v.id)}/footage-override`, {}));
+          }, !busy(), "", reasonFor(null))));
+      }
+    }
+    return h("div", { class: "factbox" }, rows);
+  }
+
   function footagePanel() {
     const keys = Object.keys((data.spec.sources) || {});
     const info = data.source_info || {};
@@ -449,8 +489,11 @@ function initBatch() {
       }
     };
     const out = [h("h2", {}, "Footage"),
-      h("p", { class: "muted" }, "Claude finds free clips (size-capped), looks at contact sheets and proposes cuts. Adjust the cut times if a shot is wrong. Coloured bars show which seconds of each clip are used; red means a problem."),
-      actionButton("Find footage", () => runStep("footage"), canRun("footage"), "primary", reasonFor("footage"))];
+      h("p", { class: "muted" }, "The AI searches free libraries, then LOOKS at every clip and only keeps clips that show what the video is about; a second AI looks at one real frame of every shot. Footage that does not show the subject blocks the render. Coloured bars show which seconds of each clip are used; red means a problem."),
+      h("div", { class: "row" },
+        actionButton("Find footage", () => runStep("footage"), canRun("footage"), "primary", reasonFor("footage")),
+        actionButton("Check footage", () => runStep("footage", { verify_only: true }), canRun("footage") && draft.some((v) => (v.cuts || []).length),
+          "", draft.some((v) => (v.cuts || []).length) ? reasonFor("footage") : "There are no shots to check yet."))];
     out.push(h("div", { class: "legend" }, draft.map((v, vi) => h("span", {}, h("i", { class: `seg${vi % SEG_COLORS}` }), v.id))));
     keys.forEach((k) => {
       const meta = info[k];
@@ -488,6 +531,7 @@ function initBatch() {
         v.redo_note ? h("div", { class: "muted" }, "Redo note: " + v.redo_note) : null,
         h("div", { class: "muted small" }, `${total.toFixed(1)} s of footage` + (narration ? `, narration about ${narration} s` : "")),
         h("table", { class: "cuts" }, h("tr", {}, h("th", {}, "Source"), h("th", {}, "Start (s)"), h("th", {}, "Length (s)"), h("th", {})), trs),
+        footageEvidence(v),
         actionButton("Add cut", () => { if (keys.length) { v.cuts.push({ source: keys[0], in: 0, dur: 3 }); dirty = true; renderPanel(true); } }, keys.length > 0)));
     });
     saveBtn = actionButton("Save cuts", () => saveVideos("visuals"), canRun("footage") && draft.length > 0 && dirty, "", dirty ? reasonFor("footage") : "Nothing to save yet.");

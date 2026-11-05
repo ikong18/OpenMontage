@@ -274,7 +274,7 @@ def test_autopilot_chains_through_review_prep_and_never_approves_or_exports(tmp_
 
     ran = []
 
-    def fake_plan(step, project, ai, params, cli=None):
+    def fake_plan(step, project, ai, params, cli=None, reviewer=None):
         def body(ctx):
             ran.append(step)
             ctx.log(f"ran {step}")
@@ -364,7 +364,7 @@ def _fact_plan_recorder(monkeypatch, fail_factcheck=False):
 
     ran = []
 
-    def fake_plan(step, project, ai, params, cli=None):
+    def fake_plan(step, project, ai, params, cli=None, reviewer=None):
         def body(ctx):
             ran.append((step, bool(params.get("factcheck"))))
             ctx.log(f"ran {step}")
@@ -458,3 +458,116 @@ def test_the_server_notices_when_its_own_code_changed_after_it_started(tmp_path)
     assert client.get("/api/health").json()["code_stale"] is True
     bid = create_batch(tmp_path / "projects", "Stale", "youtube_shorts")
     assert client.get(f"/api/batches/{bid}").json()["code_stale"] is True
+
+
+# ---- footage verification wiring (control flow only; real AIs are tested in tests/real_ai) ----------------------------
+
+
+def _footage_batch(tmp_path, name="FootWire"):
+    bid = _scripted(tmp_path, name)
+    spec = load_spec(tmp_path / bid)
+    (tmp_path / bid / "assets" / "video").mkdir(parents=True, exist_ok=True)
+    (tmp_path / bid / "assets" / "video" / "s.webm").write_bytes(b"x")
+    spec["sources"] = {"s": {"path": "assets/video/s.webm", "clip_id": "c1", "provider": "wikimedia", "license": "x",
+                             "url": "https://x", "mode": "fill"}}
+    spec["videos"][0]["cuts"] = [{"source": "s", "in": 0, "dur": 3, "shows": "a bee"}]
+    from lib.shorts.spec import save_spec
+    save_spec(tmp_path / bid, spec)
+    return bid
+
+
+def _record_plans(monkeypatch):
+    import studio.server as srv
+
+    seen = []
+
+    def fake_plan(step, project, ai, params, cli=None, reviewer=None):
+        def body(ctx):
+            seen.append({"step": step, "params": dict(params), "reviewer": reviewer})
+        return body
+
+    monkeypatch.setattr(srv, "plan_for", fake_plan)
+    monkeypatch.setattr(srv, "step_states", lambda project, running=None, failed=None: {s: "ready" for s in srv.STEPS})
+    return seen
+
+
+def test_the_other_ai_looks_at_the_footage_with_the_writers_ai_as_fallback(tmp_path, monkeypatch):
+    seen = _record_plans(monkeypatch)
+    claude, codex = FakeAi({}), FakeAi({})
+    jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+    bid = _footage_batch(tmp_path)
+    client.post(f"/api/batches/{bid}/steps/footage/run", json={"verify_only": True}, headers=H)
+    jobs.wait(bid)
+    reviewer = seen[0]["reviewer"]
+    assert [r[1:] for r in reviewer] == [("codex", "claude"), ("claude", "claude")]
+    assert reviewer[0][0] is codex and reviewer[1][0] is claude
+
+
+def test_with_only_one_ai_it_reviews_its_own_footage_and_says_so(tmp_path, monkeypatch):
+    seen = _record_plans(monkeypatch)
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootOne")
+    client.post(f"/api/batches/{bid}/steps/footage/run", json={}, headers=H)
+    jobs.wait(bid)
+    assert [r[1:] for r in seen[0]["reviewer"]] == [("claude", "claude")]
+
+
+def test_a_failing_second_ai_does_not_leave_the_footage_unchecked(tmp_path):
+    from studio.footage import apply_review, check_view, load_check  # noqa: F401
+
+    ok = lambda inputs: {"items": [{"id": "v1", "cuts": [{"index": 0, "verdict": "yes", "shows": "a bee"}]}]}  # noqa: E731
+    from tests.studio.test_footage_flow import ScriptedAi
+    import studio.footage_step as step_module
+
+    def fake_extract(video, seconds, out, width=640):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"jpg")
+        return out
+
+    step_module.extract_frame, original = fake_extract, step_module.extract_frame
+    try:
+        claude = ScriptedAi({"footage_review": ok})
+        codex = ScriptedAi({"footage_review": _AiError("not logged in")})
+        jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+        bid = _footage_batch(tmp_path, "FootFail")
+        client.post(f"/api/batches/{bid}/steps/footage/run", json={"verify_only": True}, headers=H)
+        jobs.wait(bid)
+    finally:
+        step_module.extract_frame = original
+    view = client.get(f"/api/batches/{bid}").json()["footage_check"]
+    assert view["checked"] is True and view["reviewer"] == "claude" and view["same_ai"] is True
+    assert "not logged in" in jobs.tail(bid, jobs.recent(bid)[0]["id"])
+
+
+def test_the_owner_can_override_one_videos_footage_and_a_redo_clears_it(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootOver")
+    url = f"/api/batches/{bid}/videos/v1/footage-override"
+    assert client.post(url).status_code == 403
+    assert client.post(f"/api/batches/{bid}/videos/v9/footage-override", headers=H).status_code == 404
+    assert client.post(url, headers=H).status_code == 200
+    assert load_spec(tmp_path / bid)["videos"][0]["footage_override"] is True
+    assert client.get(f"/api/batches/{bid}").json()["footage_check"]["videos"] == {}
+    client.post(f"/api/batches/{bid}/videos/v1/redo", json={"note": "no"}, headers=H)
+    assert not load_spec(tmp_path / bid)["videos"][0].get("footage_override")
+
+
+def test_override_refused_while_a_job_runs(tmp_path):
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootBusy")
+    jobs.start(bid, "render", [sys.executable, "-c", "import time; time.sleep(2)"])
+    assert client.post(f"/api/batches/{bid}/videos/v1/footage-override", headers=H).status_code == 409
+    jobs.wait(bid)
+
+
+def test_a_rejected_shot_is_the_next_thing_the_owner_is_told(tmp_path):
+    from studio.footage import apply_review, save_check
+
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootNext")
+    spec = load_spec(tmp_path / bid)
+    save_check(tmp_path / bid, apply_review(spec, [{"id": "v1", "cuts": [{"index": 0, "verdict": "no", "shows": "a man on a stage"}]}],
+                                            "claude", "codex", {}))
+    view = client.get(f"/api/batches/{bid}").json()
+    assert view["next"]["step"] == "footage" and "does not show" in view["next"]["text"]
+    assert view["footage_check"]["videos"]["v1"]["blocked"] == 1

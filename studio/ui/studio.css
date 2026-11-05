@@ -100,3 +100,11 @@ tr.bad td { background: rgba(255,107,107,.1); }
 .verdict.partly { color: var(--warn); border-color: var(--warn); }
 .verdict.unsupported { color: var(--bad); border-color: var(--bad); }
 .verdict.unverifiable { color: var(--muted); border-color: var(--muted); }
+
+/* ---- footage evidence */
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.shot { margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.shot.no { border-color: var(--bad); }
+.shot.partly { border-color: var(--warn); }
+.shot img { width: 100%; display: block; }
+.shot figcaption { padding: 6px 8px; font-size: 12px; }

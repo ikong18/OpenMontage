@@ -122,3 +122,11 @@ def test_voice_toast_is_honest_and_a_failed_change_resets_the_picker():
 def test_ui_warns_when_the_server_is_running_old_code():
     js = _read("studio.js")
     assert "code_stale" in js and "start it again" in js
+
+
+def test_footage_step_shows_the_evidence_for_every_shot():
+    js = _read("studio.js")
+    for needle in ("footage_check", "footageEvidence", "Check footage", "Use anyway", "footage-override", "verified",
+                   "illustrative", "Not checked yet", "verify_only"):
+        assert needle in js, needle
+    assert "innerHTML" not in js

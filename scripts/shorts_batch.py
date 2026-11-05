@@ -165,8 +165,9 @@ def cmd_search(args: argparse.Namespace) -> int:
     for cand in _search_candidates(args.source, args.query):
         size = _head_size(cand.download_url)
         size_text = f"{size / (1024 * 1024):.1f}" if size else "?"
-        tags = " ".join(str(getattr(cand, "source_tags", "") or "").split())[:80]
-        print(f"{cand.clip_id}	{tags}	{size_text}")
+        tags = " ".join(str(getattr(cand, "source_tags", "") or "").split())[:240]
+        seconds = getattr(cand, "duration", 0) or 0
+        print(f"{cand.clip_id}	{tags}	{size_text}	{round(seconds) if seconds else '?'}")
     return 0
 
 

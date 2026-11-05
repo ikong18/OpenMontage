@@ -223,3 +223,40 @@ def test_an_invalid_directory_error_explains_the_likely_cause(monkeypatch, tmp_p
     _fake_run(monkeypatch, returncode=1, stderr="The current directory is invalid.")
     with pytest.raises(AiError, match="work folder"):
         client_cls(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+
+
+# ---- footage verification tasks ---------------------------------------------------------------------------------
+
+
+def test_footage_tasks_are_defined_with_the_fields_the_checks_need():
+    q = SCHEMAS["footage_queries"]["properties"]["items"]["items"]
+    assert "subject" in q["required"]
+    query = q["properties"]["queries"]["items"]
+    assert query["properties"]["tier"]["enum"] == ["exact", "related"] and "tier" in query["required"]
+    pick = SCHEMAS["footage_pick"]["properties"]["items"]["items"]
+    assert pick["properties"]["picks"]["items"]["properties"]["match"]["enum"] == ["exact", "related"]
+    verify = SCHEMAS["footage_verify"]["properties"]["items"]["items"]
+    assert set(verify["required"]) == {"key", "match", "shows", "relevant_frames", "note"}
+    assert verify["properties"]["match"]["enum"] == ["exact", "related", "unrelated"]
+    assert "shows" in SCHEMAS["footage_cuts"]["properties"]["items"]["items"]["properties"]["cuts"]["items"]["required"]
+    review = SCHEMAS["footage_review"]["properties"]["items"]["items"]["properties"]["cuts"]["items"]
+    assert review["properties"]["verdict"]["enum"] == ["yes", "partly", "no"]
+    for task, tools in (("footage_pick", []), ("footage_verify", ["Read"]), ("footage_review", ["Read"])):
+        assert TASK_TOOLS[task] == tools
+        assert (ai_module.PROMPTS / f"{task}.md").read_text(encoding="utf-8").strip()
+
+
+def test_codex_attaches_every_image_a_task_lists(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen["argv"] = argv
+        Path(argv[argv.index("-o") + 1]).write_text(json.dumps({"items": []}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ai_module.subprocess, "run", fake)
+    a, b = tmp_path / "a.jpg", tmp_path / "b.jpg"
+    CodexCli(tmp_path / "w").run("footage_review", {"images": [str(a), str(b)], "videos": []}, SCHEMAS["footage_review"], ["Read"])
+    argv = seen["argv"]
+    attached = [argv[i + 1] for i, x in enumerate(argv) if x == "-i"]
+    assert attached == [str(a), str(b)]

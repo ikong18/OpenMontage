@@ -44,18 +44,42 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     }),
     "footage_queries": _wrap({
         "type": "object",
-        "properties": {"id": _STR, "queries": {"type": "array", "items": {
+        "properties": {"id": _STR, "subject": _STR, "queries": {"type": "array", "items": {
             "type": "object",
-            "properties": {"source": {"type": "string", "enum": ["nasa", "wikimedia"]}, "query": _STR},
-            "required": ["source", "query"]}}},
-        "required": ["id", "queries"],
+            "properties": {"source": {"type": "string", "enum": ["nasa", "wikimedia"]}, "query": _STR,
+                           "tier": {"type": "string", "enum": ["exact", "related"]}},
+            "required": ["source", "query", "tier"]}}},
+        "required": ["id", "subject", "queries"],
+    }),
+    "footage_pick": _wrap({
+        "type": "object",
+        "properties": {"id": _STR, "picks": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"clip_id": _STR, "match": {"type": "string", "enum": ["exact", "related"]}, "why": _STR},
+            "required": ["clip_id", "match", "why"]}}},
+        "required": ["id", "picks"],
+    }),
+    "footage_verify": _wrap({
+        "type": "object",
+        "properties": {"key": _STR, "match": {"type": "string", "enum": ["exact", "related", "unrelated"]},
+                       "shows": _STR, "relevant_frames": {"type": "array", "items": {"type": "integer"}}, "note": _STR},
+        "required": ["key", "match", "shows", "relevant_frames", "note"],
     }),
     "footage_cuts": _wrap({
         "type": "object",
         "properties": {"id": _STR, "cuts": {"type": "array", "items": {
             "type": "object",
-            "properties": {"source": _STR, "in": {"type": "number"}, "dur": {"type": "number"}},
-            "required": ["source", "in", "dur"]}}},
+            "properties": {"source": _STR, "in": {"type": "number"}, "dur": {"type": "number"}, "shows": _STR},
+            "required": ["source", "in", "dur", "shows"]}}},
+        "required": ["id", "cuts"],
+    }),
+    "footage_review": _wrap({
+        "type": "object",
+        "properties": {"id": _STR, "cuts": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"},
+                           "verdict": {"type": "string", "enum": ["yes", "partly", "no"]}, "shows": _STR},
+            "required": ["index", "verdict", "shows"]}}},
         "required": ["id", "cuts"],
     }),
 }
@@ -86,7 +110,10 @@ TASK_TOOLS: dict[str, list[str]] = {
     "topics": ["WebFetch", "WebSearch"],
     "scripts": ["WebFetch"],
     "footage_queries": [],
+    "footage_pick": [],
+    "footage_verify": ["Read"],
     "footage_cuts": ["Read"],
+    "footage_review": ["Read"],
     "topic_research": ["WebFetch", "WebSearch"],
     "fact_check": ["WebFetch", "WebSearch"],
 }
@@ -193,9 +220,10 @@ class CodexCli:
         schema_path.write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
         argv = [shutil.which(self.binary) or self.binary, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
                 "-c", "mcp_servers={}", "-C", str(self.work_dir), "--output-schema", str(schema_path), "-o", str(out_path)]
-        for source in inputs.get("sources") or []:
-            if isinstance(source, dict) and source.get("sheet"):
-                argv += ["-i", str(source["sheet"])]
+        images = [str(s["sheet"]) for s in inputs.get("sources") or [] if isinstance(s, dict) and s.get("sheet")]
+        images += [str(i) for i in inputs.get("images") or [] if str(i) not in images]
+        for image in images:
+            argv += ["-i", image]
         argv.append("-")
         try:
             proc = subprocess.run(argv, input=text, cwd=str(self.work_dir), capture_output=True, text=True,

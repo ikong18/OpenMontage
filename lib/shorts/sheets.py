@@ -45,3 +45,19 @@ def make_contact_sheet(
     if proc.returncode != 0 or not out.is_file():
         raise OSError(f"ffmpeg could not make a contact sheet: {(proc.stderr or '').strip()[:200]}")
     return {"path": str(out), "step": step, "cols": cols, "frames": frames}
+
+
+def extract_frame(video: Path, seconds: float, out: Path, width: int = 640) -> Path:
+    """One real frame of `video` at `seconds`, as a JPEG, so it can be looked at."""
+    video, out = Path(video), Path(out)
+    if not video.is_file():
+        raise FileNotFoundError(f"video not found: {video}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-ss", f"{max(seconds, 0):.2f}", "-i", str(video), "-frames:v", "1",
+         "-vf", f"scale={width}:-1", str(out)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0 or not out.is_file():
+        raise OSError(f"ffmpeg could not extract a frame at {seconds:g}s: {(proc.stderr or '').strip()[:200]}")
+    return out

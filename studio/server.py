@@ -25,6 +25,7 @@ from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
 from studio.settings import PROVIDERS, load_settings, load_writer, save_settings, save_writer
 from studio.factcheck import check_view, pick_checker
+from studio.footage import check_view as footage_view, render_blockers
 from studio.sources import source_info
 from studio.steps import STEPS, gate_status, next_action, step_states
 
@@ -176,7 +177,14 @@ def create_app(
                 label = "<topics:research:" + ",".join(str(i) for i in params["research"]) + ">"
             if step == "script" and params.get("factcheck"):
                 label = "<script:factcheck>"
-            plan = plan_for(step, project, client, params)
+            reviewers = None
+            if step == "footage":  # the other AI looks at the finished shots; the writer's AI is the fallback
+                writer = load_settings(project)["provider"]
+                rname, _same = pick_checker(writer, {name: provider_ready(name) for name in PROVIDERS})
+                reviewers = [(clients[rname], rname, writer)] if clients.get(rname) is not None else []
+                if rname != writer and clients.get(writer) is not None:
+                    reviewers.append((clients[writer], writer, writer))
+            plan = plan_for(step, project, client, params, reviewer=reviewers) if reviewers else plan_for(step, project, client, params)
             if fallback is not None:
                 first = plan
 
@@ -214,6 +222,7 @@ def create_app(
         gates = {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")}
         platform = get_platform(spec.get("platform"))
         fact = check_view(project, spec)
+        footage = footage_view(project, spec)
         fact_job = next((r for r in recent if r.get("argv") == ["<script:factcheck>"]), None)
         if fact_job and fact_job.get("status") == "failed" and not running:
             checked = fact.get("checked_at") or ""
@@ -224,6 +233,12 @@ def create_app(
                     lines = []
                 text = next((ln for ln in reversed(lines) if ln.startswith("error:")), lines[-1] if lines else "unknown error")
                 fact = {**fact, "error": text.removeprefix("error: ")[:200]}
+        next_info = next_action(steps, gates, running, len(spec.get("videos") or []), batch_id,
+                                flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale")),
+                                fact_error=fact.get("error"))
+        blockers = render_blockers(project, spec, [v["id"] for v in spec.get("videos") or [] if v.get("cuts")])
+        if blockers and not running and steps.get("footage") == "done" and steps.get("render") != "done":
+            next_info = {"kind": "todo", "step": "footage", "text": "Before the videos are made: " + blockers[0]}
         return {
             "id": batch_id,
             "platform": spec.get("platform") or "youtube_shorts",
@@ -236,9 +251,8 @@ def create_app(
             "fact_check": fact,
             "voice": {"engine": "piper", **(spec.get("voice") or PIPER_DEFAULT)},
             "voices": voice_catalog(),
-            "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id,
-                                flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale")),
-                                fact_error=fact.get("error")),
+            "footage_check": footage,
+            "next": next_info,
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
             "source_info": source_info(project, spec),
             "jobs": recent,
@@ -438,6 +452,20 @@ def create_app(
 
         await asyncio.to_thread(make)
         return {"url": f"/media/{batch_id}/review/{name}"}
+
+    @app.post("/api/batches/{batch_id}/videos/{video_id}/footage-override", dependencies=[Depends(require_token)])
+    async def footage_override(batch_id: str, video_id: str) -> dict:
+        """The owner accepts one video's footage although the footage check did not pass. Only a click can do this."""
+        project = project_or_404(batch_id)
+        spec = load_spec(project)
+        video = next((v for v in spec.get("videos") or [] if v.get("id") == video_id), None)
+        if video is None:
+            raise HTTPException(status_code=404, detail=f"no such video '{video_id}'")
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        video["footage_override"] = True
+        save_spec(project, spec)
+        return {"ok": True}
 
     @app.get("/media/{batch_id}/{path:path}")
     async def media(batch_id: str, path: str):

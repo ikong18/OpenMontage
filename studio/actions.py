@@ -20,6 +20,8 @@ from lib.shorts.spec import load_spec, save_spec, validate_spec
 from studio.ai import SCHEMAS, TASK_TOOLS, AiClient
 from studio.apply import add_source, apply_cuts, apply_research, apply_scripts, apply_topics
 from studio.factcheck import apply_check, check_inputs, save_check
+from studio.footage import render_blockers
+from studio.footage_step import footage_plan
 from studio.jobs import JobContext
 from studio.sources import source_info
 from studio.steps import gate_status, step_states
@@ -132,143 +134,6 @@ def _script(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
     return body
 
 
-# ---- footage -----------------------------------------------------------------
-
-
-def _candidates(ctx: JobContext, cli: Any, project: Path, queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Search every query; return unique candidates in query order: {clip_id, source, size_mb | None}."""
-    found: list[dict[str, Any]] = []
-    for q in queries:
-        code, out = cli.run(ctx, ["search", str(project), "--source", q["source"], "--query", q["query"]], capture=True)
-        if code != 0:
-            continue
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) < 3 or not parts[0].strip():
-                continue
-            clip_id = parts[0].strip()
-            if any(c["clip_id"] == clip_id for c in found):
-                continue
-            try:
-                size = float(parts[-1])
-            except ValueError:
-                size = None
-            found.append({"clip_id": clip_id, "source": q["source"], "query": q["query"], "size_mb": size})
-    return found
-
-
-def _fetch_for(ctx, cli, project, cands, refused, avoid=frozenset()) -> str | None:
-    """Return the key of the first usable clip among cands (already fetched, or fetched now)."""
-    tries = 0
-    for cand in cands:
-        key = _safe_key(cand["clip_id"])
-        if key in avoid:
-            continue
-        if key in (load_spec(project).get("sources") or {}):
-            return key
-        if cand["clip_id"] in refused:
-            continue
-        if cand["size_mb"] is not None and cand["size_mb"] > MAX_MB:
-            refused[cand["clip_id"]] = f"{cand['size_mb']:.0f} MB, over the size cap"
-            continue
-        if tries >= MAX_TRIES_PER_VIDEO:
-            break
-        tries += 1
-        code, out = cli.run(ctx, ["fetch", str(project), "--source", cand["source"], "--query", cand["query"],
-                                  "--clip-id", cand["clip_id"], "--key", key, "--max-mb", str(MAX_MB)], capture=True)
-        if code != 0:
-            refused[cand["clip_id"]] = (out.strip().splitlines() or ["download refused"])[-1][:120]
-            continue
-        return key
-    return None
-
-
-def _sheet(ctx, cli, project, key, step=None) -> dict[str, Any]:
-    args = ["sheet", str(project), "--key", key] + (["--step", str(step)] if step else [])
-    code, out = cli.run(ctx, args, capture=True)
-    _check(code, f"contact sheet for {key}")
-    return json.loads(out.strip().splitlines()[-1])
-
-
-def _footage(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Callable[[JobContext], None]:
-    def body(ctx: JobContext) -> None:
-        spec = load_spec(project)
-        need = [v for v in spec.get("videos") or [] if not v.get("cuts")]
-        if not need:
-            ctx.log("every video already has cuts")
-            return
-        # narration length decides how much footage is needed, so voice the narration first
-        for video in need:
-            _check(cli.run(ctx, ["voice", str(project), "--video", video["id"]])[0], f"voice for {video['id']}")
-        audio = {v["id"]: float(v.get("audio_duration") or 0) for v in read_batch(project).get("videos", [])}
-        if any(audio.get(v["id"], 0) <= 0 for v in need):
-            raise ValueError("narration length unknown after the voice step")
-        needed = {v["id"]: round(audio[v["id"]] + 0.5, 1) for v in need}
-
-        ctx.log("asking claude for search queries ...")
-        queries = ai.run("footage_queries", {"videos": [
-            {"id": v["id"], "topic": v.get("topic"), "narration": v.get("narration"),
-             "redo_note": v.get("redo_note")} for v in need]},
-            SCHEMAS["footage_queries"], TASK_TOOLS["footage_queries"])
-        q_by_id = {i["id"]: i.get("queries") or [] for i in queries.get("items") or []}
-
-        refused: dict[str, str] = {}
-        keys: list[str] = []
-        for video in need:
-            key = _fetch_for(ctx, cli, project, _candidates(ctx, cli, project, q_by_id.get(video["id"], [])), refused,
-                             avoid=set(video.get("redo_avoid") or []))
-            if key is None:
-                reasons = "; ".join(f"{c}: {r}" for c, r in list(refused.items())[:4]) or "no candidates found"
-                raise RuntimeError(f"no clip within the {MAX_MB} MB size cap for {video['id']} ({reasons})")
-            if key not in keys:
-                keys.append(key)
-
-        sheets = []
-        spec = load_spec(project)
-        for key in keys:
-            info = _sheet(ctx, cli, project, key)
-            if info["duration"] > info["step"] * SHEET_FRAMES:
-                info = _sheet(ctx, cli, project, key, step=math.ceil(info["duration"] / SHEET_FRAMES))
-            spec["sources"][key].pop("mode", None)  # re-choose from the real picture shape
-            spec = add_source(spec, key, spec["sources"][key], info["width"], info["height"])
-            used = [[c["in"], c["in"] + c["dur"]] for v in spec["videos"] for c in v.get("cuts") or []
-                    if c.get("source") == key]
-            sheets.append({"key": key, "sheet": info["path"], "step": info["step"], "cols": info["cols"],
-                           "duration": info["duration"], "already_used": used})
-        save_spec(project, spec)
-
-        ctx.log("asking claude to pick cuts from the contact sheets ...")
-        result = ai.run("footage_cuts", {
-            "videos": [{"id": v["id"], "narration": v.get("narration"), "needed_seconds": needed[v["id"]]} for v in need],
-            "sources": sheets,
-        }, SCHEMAS["footage_cuts"], TASK_TOOLS["footage_cuts"], add_dirs=[project / "review"])
-        items = [i for i in result.get("items") or [] if i.get("id") in needed]
-        missing = [vid for vid in needed if vid not in {i.get("id") for i in items}]
-        if missing:
-            raise ValueError(f"the AI returned no cuts for {', '.join(missing)}")
-        lengths = {s["key"]: s["duration"] for s in sheets}
-        for item in items:
-            for cut in item.get("cuts") or []:
-                length = lengths.get(cut.get("source"))
-                if length is not None and float(cut.get("in", 0)) + float(cut.get("dur", 0)) > length + 0.05:
-                    raise ValueError(f"{item['id']}: a cut runs past the end of the clip "
-                                     f"('{cut.get('source')}' is {length:.1f} s long)")
-        merged = apply_cuts(spec, items, project)
-        for video in merged["videos"]:
-            if video["id"] in needed:
-                total = sum(float(c["dur"]) for c in video.get("cuts") or [])
-                if total < needed[video["id"]]:
-                    raise ValueError(f"cuts for {video['id']} total {total:.1f} s but the narration needs "
-                                     f"{needed[video['id']]:.1f} s")
-        for video in merged["videos"]:
-            if video["id"] in needed:
-                video.pop("redo_note", None)
-                video.pop("redo_avoid", None)
-        save_spec(project, merged)
-        ctx.log("saved cuts")
-    return body
-
-
 # ---- render, review, export --------------------------------------------------
 
 
@@ -330,6 +195,9 @@ def _render(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
         if not stale:
             ctx.log("every render is already current - nothing to do")
             return
+        blockers = render_blockers(project, spec, stale)  # footage that was not verified, or was judged not to show the subject
+        if blockers:
+            raise ValueError("; ".join(blockers))
         ids = ",".join(stale)
         _check(cli.run(ctx, ["voice", str(project), "--video", ids])[0], "voice")
         _cover_audio(ctx, project, stale)
@@ -352,12 +220,14 @@ def _export(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
     return body
 
 
-_PLANS = {"topics": _topics, "script": _script, "footage": _footage, "render": _render,
-          "review": _review, "export": _export}
+_PLANS = {"topics": _topics, "script": _script, "render": _render, "review": _review, "export": _export}
 
 
 def plan_for(step: str, project_dir: Path, ai: AiClient | None, params: dict[str, Any],
-             cli: Any = None) -> Callable[[JobContext], None]:
+             cli: Any = None, reviewer: tuple[AiClient, str, str] | None = None) -> Callable[[JobContext], None]:
+    """reviewer = (the other AI, its name, the writer's name): it looks at the footage frames after the cuts are chosen."""
+    if step == "footage":
+        return footage_plan(Path(project_dir), ai, params or {}, cli or Cli(), reviewer)
     if step not in _PLANS:
         raise ValueError(f"unknown step '{step}'")
     return _PLANS[step](Path(project_dir), ai, params or {}, cli or Cli())
@@ -391,6 +261,7 @@ def redo_video(project_dir: Path, video_id: str, note: str) -> None:
         raise ValueError(f"no such video '{video_id}'")
     video["redo_avoid"] = sorted({c.get("source") for c in video.get("cuts") or [] if c.get("source")})
     video["cuts"] = []
+    video.pop("footage_override", None)
     video["redo_note"] = note
     save_spec(project, spec)
     try:

@@ -39,3 +39,17 @@ def test_contact_sheet_frames_capped_by_grid(clip, tmp_path):
 def test_probe_missing_file_raises(tmp_path):
     with pytest.raises(OSError):
         probe_video(tmp_path / "nope.mp4")
+
+
+def test_extract_frame_writes_a_picture_from_the_given_second(clip, tmp_path):
+    from lib.shorts.sheets import extract_frame
+
+    out = extract_frame(clip, 5.0, tmp_path / "frames" / "f.jpg", width=320)
+    assert out.is_file() and out.stat().st_size > 1000
+
+
+def test_extract_frame_fails_clearly_for_a_missing_video(tmp_path):
+    from lib.shorts.sheets import extract_frame
+
+    with pytest.raises(OSError):
+        extract_frame(tmp_path / "nope.mp4", 1.0, tmp_path / "f.jpg")

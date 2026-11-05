@@ -307,16 +307,16 @@ def test_render_spec_caption_style_overrides_the_platform(project, capsys, monke
 
 def test_search_prints_candidates_with_sizes(project, capsys, monkeypatch):
     cands = [
-        SimpleNamespace(clip_id="nasa_a", source_tags="Sun flare", download_url="https://x/a.mp4"),
-        SimpleNamespace(clip_id="nasa_b", source_tags="Sun big", download_url="https://x/b.mp4"),
+        SimpleNamespace(clip_id="nasa_a", source_tags="Sun flare", download_url="https://x/a.mp4", duration=42.4),
+        SimpleNamespace(clip_id="nasa_b", source_tags="Sun big", download_url="https://x/b.mp4", duration=0),
     ]
     monkeypatch.setattr(shorts_batch, "_search_candidates", lambda source, query: cands)
     monkeypatch.setattr(shorts_batch, "_head_size", lambda url: 5 * 1024 * 1024 if url.endswith("a.mp4") else None)
     code, out = _run(capsys, "search", str(project), "--source", "nasa", "--query", "sun")
     assert code == 0
     lines = out.strip().splitlines()
-    assert lines[0].split("\t") == ["nasa_a", "Sun flare", "5.0"]
-    assert lines[1].split("\t") == ["nasa_b", "Sun big", "?"]
+    assert lines[0].split("\t") == ["nasa_a", "Sun flare", "5.0", "42"]
+    assert lines[1].split("\t") == ["nasa_b", "Sun big", "?", "?"]
 
 
 def test_search_unknown_source_is_one_line_error(project, capsys):
