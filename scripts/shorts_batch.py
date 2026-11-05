@@ -108,10 +108,17 @@ def _check_current(batch: dict[str, Any], spec: dict[str, Any], ids: list[str] |
 
 
 def _selected(spec: dict[str, Any], only: str | None) -> list[dict[str, Any]]:
-    videos = [v for v in spec["videos"] if only in (None, v["id"])]
-    if not videos:
-        raise ValueError(f"no video with id '{only}' in the spec")
-    return videos
+    """All videos, or the comma-separated ids given to --video (in spec order)."""
+    if only is None:
+        return list(spec["videos"])
+    wanted = [w.strip() for w in only.split(",") if w.strip()]
+    known = {v["id"] for v in spec["videos"]}
+    for vid in wanted:
+        if vid not in known:
+            raise ValueError(f"no video with id '{vid}' in the spec")
+    if not wanted:
+        raise ValueError("no video ids given")
+    return [v for v in spec["videos"] if v["id"] in wanted]
 
 
 # ---- subcommands -------------------------------------------------------------
@@ -207,6 +214,8 @@ def cmd_voice(args: argparse.Namespace) -> int:
         aligner = make_aligner()
         timings = aligner.align(video["narration"], wav)
         timing_method = getattr(aligner, "method", "estimate")
+        if getattr(aligner, "error", None):
+            print(f"note: {video['id']}: the speech model was not used ({aligner.error}); captions use the pause-based estimate")
         _, duration = detect_speech_spans(wav)
         captions = audio_dir / f"{video['id']}.captions.json"
         captions.write_text(json.dumps(to_remotion_captions(timings)), encoding="utf-8")

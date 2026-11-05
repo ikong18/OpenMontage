@@ -344,3 +344,12 @@ def test_sheet_command_writes_png_for_source_key(project, capsys, monkeypatch):
 def test_sheet_unknown_key_errors_one_line(project, capsys):
     code, out = _run(capsys, "sheet", str(project), "--key", "nope")
     assert code == 1 and out.startswith("error:") and _one_line(out)
+
+
+def test_video_option_accepts_several_ids_and_rejects_unknown_ones(project, capsys):
+    spec = load_spec(project)
+    assert [v["id"] for v in shorts_batch._selected(spec, "v1")] == ["v1"]
+    assert [v["id"] for v in shorts_batch._selected(spec, "v1,v1")] == ["v1"]
+    assert [v["id"] for v in shorts_batch._selected(spec, None)] == ["v1"]
+    with pytest.raises(ValueError, match="v9"):
+        shorts_batch._selected(spec, "v1,v9")

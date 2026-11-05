@@ -80,3 +80,10 @@ def test_pick_checker_prefers_the_other_ai_and_says_when_it_is_the_same():
     assert pick_checker("codex", both) == ("claude", False)
     assert pick_checker("claude", {"claude": True, "codex": False}) == ("claude", True)
     assert VERDICTS == ("supported", "partly", "unsupported", "unverifiable")
+
+
+def test_view_ignores_damaged_records(project):
+    (project / "artifacts").mkdir(exist_ok=True)
+    (project / "artifacts" / "fact_check.json").write_text(
+        json.dumps({"videos": {"v1": "garbage", "v2": 7}, "checker": "codex"}), encoding="utf-8")
+    assert check_view(project, load_spec(project))["videos"] == {}

@@ -111,3 +111,9 @@ def test_voice_picker_with_preview():
     js = _read("studio.js")
     for needle in ("/voice/preview", "/voice", "Preview voice", "voices", "<audio" if False else "audio"):
         assert needle in js, needle
+
+
+def test_voice_toast_is_honest_and_a_failed_change_resets_the_picker():
+    js = _read("studio.js")
+    assert "longer than its footage" in js
+    assert 'settingsSig = ""' in js

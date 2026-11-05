@@ -40,7 +40,7 @@ def test_choosing_a_voice_is_saved_in_the_spec_and_validated(env):
     assert load_spec(tmp / bid)["voice"] == {"engine": "kokoro", "voice": "am_michael", "speed": 1.05}
     assert client.get(f"/api/batches/{bid}").json()["voice"]["voice"] == "am_michael"
     back = client.put(f"/api/batches/{bid}/voice", json={"engine": "piper"}, headers=H)
-    assert back.status_code == 200 and load_spec(tmp / bid)["voice"]["engine"] == "piper"
+    assert back.status_code == 200 and load_spec(tmp / bid)["voice"].get("engine", "piper") == "piper"
 
 
 @pytest.mark.parametrize("bad", [{"engine": "sapi"}, {"engine": "kokoro", "voice": "nobody"}, {"engine": "kokoro", "voice": "af_heart", "speed": 9}])
@@ -85,3 +85,21 @@ def test_piper_preview_is_a_real_playable_file(env):
 def test_preview_of_a_bad_voice_is_refused(env):
     _, _, client, bid = env
     assert client.post(f"/api/batches/{bid}/voice/preview", json={"engine": "kokoro", "voice": "nobody"}, headers=H).status_code == 422
+
+
+def test_a_piper_choice_keeps_the_original_spelling_so_renders_do_not_go_stale(env):
+    tmp, _, client, bid = env
+    from lib.shorts.batch import voice_fingerprint
+
+    before = load_spec(tmp / bid)
+    assert client.put(f"/api/batches/{bid}/voice", json={"engine": "piper", "model": "en_US-lessac-medium"}, headers=H).status_code == 200
+    after = load_spec(tmp / bid)
+    video = {"id": "v1", "narration": "Hello."}
+    assert voice_fingerprint(before, video) == voice_fingerprint(after, video)
+
+
+def test_a_piper_model_outside_the_list_is_refused(env):
+    _, _, client, bid = env
+    for model in ("C:/anywhere/x.onnx", "--help", "en_US-amy-medium"):
+        resp = client.put(f"/api/batches/{bid}/voice", json={"engine": "piper", "model": model}, headers=H)
+        assert resp.status_code == 422, model

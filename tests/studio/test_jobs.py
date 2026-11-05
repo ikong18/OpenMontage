@@ -184,3 +184,24 @@ def test_on_success_error_is_written_to_the_finished_jobs_log(tmp_path):
     _wait(runner, "b1")
     assert "cannot continue" in runner.tail("b1", job)
     assert runner.recent("b1")[0]["status"] == "ok"
+
+
+def test_on_failure_runs_only_after_a_failed_job(tmp_path):
+    runner = JobRunner(tmp_path)
+    seen = []
+    runner.start("b1", "script", [PY, "-c", "import sys; sys.exit(1)"], on_failure=lambda: seen.append("failed"))
+    _wait(runner, "b1")
+    runner.start("b1", "script", [PY, "-c", "print(1)"], on_failure=lambda: seen.append("ok-run"))
+    _wait(runner, "b1")
+    assert seen == ["failed"]
+
+
+def test_on_failure_error_is_logged_not_raised(tmp_path):
+    runner = JobRunner(tmp_path)
+
+    def boom():
+        raise RuntimeError("could not continue")
+
+    job = runner.start("b1", "script", [PY, "-c", "import sys; sys.exit(1)"], on_failure=boom)
+    _wait(runner, "b1")
+    assert "could not continue" in runner.tail("b1", job)

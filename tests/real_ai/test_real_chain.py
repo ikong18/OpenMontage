@@ -51,14 +51,19 @@ def test_approving_a_typed_topic_writes_the_scripts_by_itself(ai, provider, tmp_
     end = time.time() + 1800
     while time.time() < end:
         steps = [r["step"] for r in jobs.recent(bid)]
-        if "script" in steps and not jobs.running(bid):
+        if steps.count("script") >= 2 and not jobs.running(bid):  # the scripts, then their fact check
             break
         time.sleep(2)
     view = client.get(f"/api/batches/{bid}").json()
     log = {r["step"]: jobs.tail(bid, r["id"], 15) for r in jobs.recent(bid)}
     print(f"[{provider}] jobs: {[(r['step'], r['status']) for r in reversed(jobs.recent(bid))]}")
     assert view["gates"]["idea"] == "approved" and view["gates"]["review_queue"] == "none"
-    assert [r["status"] for r in jobs.recent(bid) if r["step"] == "script"] == ["ok"], log.get("script")
+    assert [r["status"] for r in jobs.recent(bid) if r["step"] == "script"] == ["ok", "ok"], log.get("script")
     assert view["steps"]["script"] == "done"
+    fact = view["fact_check"]
+    print(f"[{provider}] fact check: {fact.get('checker')} same_ai={fact.get('same_ai')} -> "
+          f"{[(c['verdict']) for v in fact['videos'].values() for c in v['claims']]}")
+    assert fact["checked"] is True and not fact.get("error") and not fact["videos"]["v1"]["stale"]
+    assert all(c["verdict"] in ("supported", "partly", "unsupported", "unverifiable") for c in fact["videos"]["v1"]["claims"])
     assert len(load_spec(tmp_path / bid)["videos"][0]["narration"].split()) >= 40
     assert "footage" not in [r["step"] for r in jobs.recent(bid)], "autopilot is off: the chain must stop after the scripts"

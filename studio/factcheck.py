@@ -82,7 +82,7 @@ def check_view(project_dir: Path, spec: dict[str, Any]) -> dict[str, Any]:
     current = {v.get("id"): v for v in spec.get("videos") or []}
     videos = {}
     for vid, rec in record["videos"].items():
-        if vid not in current:
+        if vid not in current or not isinstance(rec, dict):
             continue
         videos[vid] = {**rec, "stale": rec.get("hash") != video_hash(current[vid]), "flagged": claims_flagged(rec)}
     return {"checked": True, "checked_at": record.get("checked_at"), "writer": record.get("writer"),

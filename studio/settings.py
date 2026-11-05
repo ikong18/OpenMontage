@@ -42,3 +42,22 @@ def save_settings(project_dir: Path, new: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     return merged
+
+
+def _writer_path(project_dir: Path) -> Path:
+    return Path(project_dir) / "studio" / "writer.json"
+
+
+def save_writer(project_dir: Path, provider: str) -> None:
+    """Remember which AI wrote the scripts, so the fact check stays 'the other one' even if the owner switches AI later."""
+    path = _writer_path(project_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"writer": provider}), encoding="utf-8")
+
+
+def load_writer(project_dir: Path) -> str | None:
+    try:
+        data = json.loads(_writer_path(project_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get("writer") if isinstance(data, dict) and data.get("writer") in PROVIDERS else None

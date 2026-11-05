@@ -17,6 +17,7 @@ from lib.shorts.align import SilenceAligner, WordAligner, WordTiming, _spread, d
 
 MIN_MATCH = 0.5
 MIN_WORD_MS = 30
+MIN_TAIL_SECONDS = 0.2
 _MODELS: dict[str, object] = {}
 
 
@@ -88,10 +89,16 @@ class WhisperAligner:
             while j < n and starts[j] is None:
                 j += 1
             run = words[i:j]
-            right = starts[j] if j < n else duration
-            left = ends[i - 1] if i > 0 else max(0.0, right - 0.35 * len(run))
-            if j >= n:
-                right = min(duration, left + 0.35 * len(run)) if left + 0.35 * len(run) > left else duration
+            if j >= n:  # words Whisper missed at the end: each needs a readable time, taken from the word before if need be
+                need = MIN_TAIL_SECONDS * len(run)
+                left = ends[i - 1] if i > 0 else 0.0
+                if i > 0 and duration - left < need:
+                    left = max(duration - need, starts[i - 1] + 0.05)
+                    ends[i - 1] = min(ends[i - 1], left)
+                right = min(duration, left + max(need, 0.35 * len(run)))
+            else:
+                right = starts[j]
+                left = ends[i - 1] if i > 0 else max(0.0, right - 0.35 * len(run))
             if right <= left:
                 right = left + 0.05 * len(run)
             for k, t in enumerate(_spread(run, left, right)):

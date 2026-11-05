@@ -20,10 +20,10 @@ from lib.shorts.platforms import get_platform
 from lib.shorts.spec import STAGES, load_spec, save_spec
 from lib.shorts.voices import (ENGLISH_VOICES, kokoro_available, synthesize_kokoro, validate_voice)
 from studio.actions import AI_STEPS, REPO, approval_argv, plan_for, redo_video
-from studio.ai import AiClient
+from studio.ai import AiClient, AiError
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
-from studio.settings import PROVIDERS, load_settings, save_settings
+from studio.settings import PROVIDERS, load_settings, load_writer, save_settings, save_writer
 from studio.factcheck import check_view, pick_checker
 from studio.sources import source_info
 from studio.steps import STEPS, gate_status, next_action, step_states
@@ -101,18 +101,23 @@ def create_app(
 
     CHAIN = {"script": "footage", "footage": "render", "render": "review"}
 
-    def chain_after(batch_id: str, step: str, project: Path, params: dict[str, Any] | None = None):
-        """After a step succeeds and autopilot is on, start the next one (never approvals, never export)."""
-        if step == "script" and not (params or {}).get("factcheck"):
-            return lambda: start_step(batch_id, "script", {"factcheck": True})  # scripts are always fact-checked
+    def chain_after(batch_id: str, step: str, project: Path, params: dict[str, Any] | None = None, chained: bool = False):
+        """(on_success, on_failure) for a step: scripts are always fact-checked; with autopilot on the chain goes on
+        (never approvals, never export). A fact check the owner starts by hand ("Fact-check again") never chains."""
+        params = params or {}
+        if step == "script" and not params.get("factcheck"):
+            return (lambda: start_step(batch_id, "script", {"factcheck": True, "_chained": True})), None
+        if step == "script" and not chained:
+            return None, None
         nxt = CHAIN.get(step)
         if nxt is None:
-            return None
+            return None, None
 
         def go() -> None:
             if load_settings(project)["autopilot"]:
                 start_step(batch_id, nxt, {})
-        return go
+        # a failed fact check is shown to the owner, but it must not strand an autopilot run
+        return go, (go if step == "script" else None)
 
     def start_step(batch_id: str, step: str, params: dict[str, Any]) -> str:
         project = project_or_404(batch_id)
@@ -125,22 +130,40 @@ def create_app(
         if step == "topics" and gate_status(project, "idea") == "approved":
             raise StepError(409, "topics are already approved; start a new batch")
         params = dict(params or {})
+        chained = bool(params.pop("_chained", False))  # only the server's own chain sets this
         for forged in ("writer", "checker"):
             params.pop(forged, None)  # who wrote and who checked is decided here, never by the request
         client = ai_for(project)
+        fallback = None
         if step == "script" and params.get("factcheck"):
-            writer = load_settings(project)["provider"]
+            writer = load_writer(project) or load_settings(project)["provider"]
             checker, _same = pick_checker(writer, {name: provider_ready(name) for name in PROVIDERS})
             client = clients.get(checker)
             params.update({"writer": writer, "checker": checker})
+            if checker != writer and clients.get(writer) is not None:
+                fallback = (writer, clients[writer])
+        elif step == "script":
+            save_writer(project, load_settings(project)["provider"])
         if step in AI_STEPS and client is None:
             raise StepError(503, "no AI client is configured for this server")
         try:
             label = None
             if step == "topics" and params.get("research"):
                 label = "<topics:research:" + ",".join(str(i) for i in params["research"]) + ">"
-            return jobs.run_steps(batch_id, step, plan_for(step, project, client, params),
-                                  on_success=chain_after(batch_id, step, project, params), label=label)
+            if step == "script" and params.get("factcheck"):
+                label = "<script:factcheck>"
+            plan = plan_for(step, project, client, params)
+            if fallback is not None:
+                first = plan
+
+                def plan(ctx, _first=first, _fb=fallback, _params=dict(params)):  # noqa: F811 - the other AI failed: try the writer's
+                    try:
+                        _first(ctx)
+                    except AiError as exc:
+                        ctx.log(f"{_params['checker']} could not check ({exc}); asking {_fb[0]} instead")
+                        plan_for(step, project, _fb[1], {**_params, "checker": _fb[0]})(ctx)
+            on_ok, on_fail = chain_after(batch_id, step, project, params, chained)
+            return jobs.run_steps(batch_id, step, plan, on_success=on_ok, on_failure=on_fail, label=label)
         except JobBusy:
             raise StepError(409, "a job is already running for this batch") from None
 
@@ -167,6 +190,16 @@ def create_app(
         gates = {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")}
         platform = get_platform(spec.get("platform"))
         fact = check_view(project, spec)
+        fact_job = next((r for r in recent if r.get("argv") == ["<script:factcheck>"]), None)
+        if fact_job and fact_job.get("status") == "failed" and not running:
+            checked = fact.get("checked_at") or ""
+            if not checked or (fact_job.get("ended") or "") > checked:
+                try:
+                    lines = [ln for ln in jobs.tail(batch_id, fact_job["id"], 20).splitlines() if ln.strip()]
+                except (OSError, FileNotFoundError):
+                    lines = []
+                text = next((ln for ln in reversed(lines) if ln.startswith("error:")), lines[-1] if lines else "unknown error")
+                fact = {**fact, "error": text.removeprefix("error: ")[:200]}
         return {
             "id": batch_id,
             "platform": spec.get("platform") or "youtube_shorts",
@@ -179,7 +212,8 @@ def create_app(
             "voice": {"engine": "piper", **(spec.get("voice") or PIPER_DEFAULT)},
             "voices": voice_catalog(),
             "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id,
-                                flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale"))),
+                                flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale")),
+                                fact_error=fact.get("error")),
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
             "source_info": source_info(project, spec),
             "jobs": recent,
@@ -277,6 +311,7 @@ def create_app(
     @app.post("/api/batches/{batch_id}/steps/{step}/run", status_code=202, dependencies=[Depends(require_token)])
     async def run_step(batch_id: str, step: str, body: dict = Body(default_factory=dict)) -> dict:
         project_or_404(batch_id)
+        body = {k: v for k, v in body.items() if not str(k).startswith("_")}  # internal keys are the server's own
         try:
             return {"job": start_step(batch_id, step, body)}
         except StepError as exc:
@@ -327,16 +362,16 @@ def create_app(
             voice: dict[str, Any] = {"engine": "kokoro", "voice": body.get("voice", "af_heart")}
             if "speed" in body:
                 voice["speed"] = body["speed"]
+        elif engine == "piper":
+            was_piper = current.get("engine", "piper") == "piper"
+            voice = {"model": body.get("model", current.get("model", "en_US-lessac-medium") if was_piper else "en_US-lessac-medium"),
+                     "length_scale": body.get("length_scale", current.get("length_scale", 0.95) if was_piper else 0.95)}
         else:
-            voice = {**PIPER_DEFAULT, **{k: v for k, v in current.items() if k in ("model", "length_scale") and current.get("engine", "piper") == "piper"}}
-            voice["engine"] = engine
-            for key in ("model", "length_scale"):
-                if key in body:
-                    voice[key] = body[key]
+            voice = {"engine": engine}
         problems = validate_voice(voice)
         if problems:
             raise HTTPException(status_code=422, detail="; ".join(problems))
-        if voice["engine"] == "kokoro" and not kokoro_available():
+        if voice.get("engine") == "kokoro" and not kokoro_available():
             raise HTTPException(status_code=422, detail="Kokoro is not set up on this computer (see studio/README.md)")
         return voice
 
@@ -354,14 +389,15 @@ def create_app(
     async def preview_voice(batch_id: str, body: dict = Body(default_factory=dict)) -> dict:
         project = project_or_404(batch_id)
         voice = _clean_voice(body, load_spec(project).get("voice") or {})
-        label = voice["voice"] if voice["engine"] == "kokoro" else voice["model"]
+        engine = voice.get("engine", "piper")
+        label = voice["voice"] if engine == "kokoro" else voice["model"]
         speed = voice.get("speed", voice.get("length_scale", ""))
-        name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"voice_preview_{voice['engine']}_{label}_{speed}") + ".wav"
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"voice_preview_{engine}_{label}_{speed}") + ".wav"
         out = project / "review" / name
 
         def make() -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
-            if voice["engine"] == "kokoro":
+            if engine == "kokoro":
                 synthesize_kokoro(voice, PREVIEW_TEXT, out)
                 return
             from tools.tool_registry import registry

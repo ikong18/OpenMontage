@@ -132,3 +132,13 @@ def test_sample_frames_missing_ffmpeg_message(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         sample_frames(tmp_path / "v.mp4", tmp_path / "frames")
     assert "ffmpeg" in str(exc.value)
+
+
+def test_narration_asset_names_the_voice_that_really_made_it(projects):
+    write_idea_record(projects, _spec(), approve=True)
+    batch = _batch(projects / PID)
+    batch["videos"][0]["cost_entries"] = [{"tool": "kokoro_onnx", "provider": "kokoro", "cost_usd": 0.0}]
+    write_stage_records(projects, _spec(), batch, probe=_probe, sampler=_frames)
+    manifest = read_checkpoint(projects, PID, "voice_captions")["artifacts"]["asset_manifest"]
+    narration = next(a for a in manifest["assets"] if a["type"] == "narration")
+    assert narration["source_tool"] == "kokoro_onnx" and narration["provider"] == "kokoro"

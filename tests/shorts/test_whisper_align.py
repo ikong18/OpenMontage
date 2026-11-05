@@ -96,6 +96,7 @@ def test_digits_and_odd_tokens_still_get_one_timing_each(narration):
     aligner = WhisperAligner()
     timings = aligner.align(odd, wav)
     assert len(timings) == len(odd.split()) and all(t.end_ms > t.start_ms for t in timings)
+    assert aligner.method == "whisper", "the words around the digits should still match the audio"
 
 
 def test_unrelated_audio_falls_back_to_the_estimate(tmp_path):
@@ -108,5 +109,6 @@ def test_unrelated_audio_falls_back_to_the_estimate(tmp_path):
     assert aligner.method == "estimate" and len(timings) == 9
 
 
-def test_make_aligner_returns_a_whisper_aligner_when_available():
+def test_make_aligner_returns_a_whisper_aligner_when_available(monkeypatch):
+    monkeypatch.delenv("OPENMONTAGE_ALIGNER", raising=False)
     assert isinstance(make_aligner(), WhisperAligner)

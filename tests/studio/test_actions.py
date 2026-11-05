@@ -202,8 +202,7 @@ def test_render_runs_voice_then_render_for_each_stale_video(batch):
     _ready_for_footage(batch)
     cli = FakeCli(batch)
     plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
-    assert cli.calls == [["voice", str(batch), "--video", "v1"], ["render", str(batch), "--video", "v1"],
-                         ["voice", str(batch), "--video", "v2"], ["render", str(batch), "--video", "v2"]]
+    assert cli.calls == [["voice", str(batch), "--video", "v1,v2"], ["render", str(batch), "--video", "v1,v2"]]
 
 
 def test_review_prepare_runs_checkpoints_without_approve(batch):
@@ -512,4 +511,63 @@ def test_factcheck_failure_leaves_the_scripts_untouched(batch):
     before = (batch / "artifacts" / "batch_spec.json").read_bytes()
     with pytest.raises(AiError):
         plan_for("script", batch, FakeAi({"fact_check": AiError("offline")}), {"factcheck": True}, FakeCli(batch))(_ctx(batch))
+    assert (batch / "artifacts" / "batch_spec.json").read_bytes() == before
+
+
+# ---- a longer voice must not leave a video longer than its footage (real ffmpeg clip) --------------------------
+
+import shutil as _shutil  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+
+needs_ffmpeg = pytest.mark.skipif(_shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+
+
+def _clip_project(batch, cuts, audio_seconds):
+    video_dir = batch / "assets" / "video"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    _subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=5:duration=30",
+                     "-pix_fmt", "yuv420p", str(video_dir / "s.mp4")], check=True)
+    spec = load_spec(batch)
+    spec["sources"] = {"s": {"path": "assets/video/s.mp4", "clip_id": "clip1", "provider": "nasa", "license": "pd",
+                             "url": "https://x", "mode": "fill"}}
+    spec["videos"] = [{"id": "v1", "topic": "t", "hook_type": "question", "hook_text": "h?", "narration": "Words. More words.",
+                       "claims": [{"text": "c", "sources": [SRC]}], "title": "T", "description": "D", "tags": ["a"],
+                       "cuts": [{"source": "s", "in": a, "dur": b} for a, b in cuts]}]
+    save_spec(batch, spec)
+
+    def handler(args, project):
+        if args[0] == "voice":
+            write_batch(project, {"videos": [{"id": "v1", "audio_duration": audio_seconds}]})
+    return handler
+
+
+@needs_ffmpeg
+def test_render_extends_the_last_shot_when_the_new_voice_is_longer(batch):
+    cli = FakeCli(batch, _clip_project(batch, [(0, 5), (10, 5)], 11.0))
+    plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    cuts = load_spec(batch)["videos"][0]["cuts"]
+    assert sum(c["dur"] for c in cuts) >= 11.0 and cuts[0] == {"source": "s", "in": 0, "dur": 5}
+    assert cuts[1]["in"] == 10 and [c[0] for c in cli.calls] == ["voice", "render"]
+
+
+@needs_ffmpeg
+def test_render_stops_with_a_clear_message_when_the_footage_cannot_cover_the_voice(batch):
+    cli = FakeCli(batch, _clip_project(batch, [(0, 5), (28, 2)], 12.0))   # the last shot already ends at the end of the clip
+    with pytest.raises(ValueError, match="footage"):
+        plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    assert [c[0] for c in cli.calls] == ["voice"], "must not render a video that ends early"
+
+
+@needs_ffmpeg
+def test_extension_never_overlaps_another_cut_of_the_same_clip(batch):
+    cli = FakeCli(batch, _clip_project(batch, [(10, 5), (5, 5)], 11.0))   # extending 5..10 would run into 10..15
+    with pytest.raises(ValueError, match="footage"):
+        plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+
+
+@needs_ffmpeg
+def test_nothing_changes_when_the_footage_already_covers_the_voice(batch):
+    cli = FakeCli(batch, _clip_project(batch, [(0, 5), (10, 5)], 9.9))
+    before = (batch / "artifacts" / "batch_spec.json").read_bytes()
+    plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
     assert (batch / "artifacts" / "batch_spec.json").read_bytes() == before

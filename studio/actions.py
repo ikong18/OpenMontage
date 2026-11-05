@@ -21,6 +21,7 @@ from studio.ai import SCHEMAS, TASK_TOOLS, AiClient
 from studio.apply import add_source, apply_cuts, apply_research, apply_scripts, apply_topics
 from studio.factcheck import apply_check, check_inputs, save_check
 from studio.jobs import JobContext
+from studio.sources import source_info
 from studio.steps import gate_status, step_states
 
 REPO = Path(__file__).resolve().parents[1]
@@ -271,6 +272,46 @@ def _footage(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> C
 # ---- render, review, export --------------------------------------------------
 
 
+def _cover_audio(ctx: JobContext, project: Path, ids: list[str]) -> None:
+    """A different voice can run longer than the footage. Lengthen the last shot if the clip has room, else say so."""
+    spec = load_spec(project)
+    try:
+        recorded = {v.get("id"): v for v in read_batch(project).get("videos", [])}
+    except (OSError, ValueError):
+        return  # nothing voiced yet: the render command will say so
+    info = None
+    changed = False
+    for video in spec.get("videos") or []:
+        if video["id"] not in ids:
+            continue
+        audio = float((recorded.get(video["id"]) or {}).get("audio_duration") or 0)
+        cuts = video.get("cuts") or []
+        total = sum(float(c["dur"]) for c in cuts)
+        if not audio or not cuts or total >= audio - 0.1:
+            continue
+        delta = audio + 0.15 - total
+        last = cuts[-1]
+        info = info if info is not None else source_info(project, spec)
+        meta = info.get(last["source"])
+        end = float(last["in"]) + float(last["dur"]) + delta
+        room = meta is not None and end <= meta["duration"] + 0.01
+        if room:
+            identity = (spec.get("sources") or {}).get(last["source"], {}).get("clip_id")
+            for other in spec["videos"]:
+                for cut in other.get("cuts") or []:
+                    same_clip = (spec["sources"].get(cut["source"]) or {}).get("clip_id") == identity
+                    if cut is not last and same_clip and not (cut["in"] + cut["dur"] <= last["in"] or cut["in"] >= end):
+                        room = False
+        if not room:
+            raise ValueError(f"{video['id']}: the voice is {audio:.1f} s but the footage is only {total:.1f} s and the last "
+                             "shot cannot be made longer (the clip ends or the next seconds are used); redo this video's footage")
+        last["dur"] = round(float(last["dur"]) + delta, 2)
+        changed = True
+        ctx.log(f"{video['id']}: the voice is {audio:.1f} s, so the last shot was lengthened by {delta:.1f} s")
+    if changed:
+        save_spec(project, spec)
+
+
 def _render(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Callable[[JobContext], None]:
     def body(ctx: JobContext) -> None:
         spec = load_spec(project)
@@ -289,9 +330,10 @@ def _render(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
         if not stale:
             ctx.log("every render is already current - nothing to do")
             return
-        for vid in stale:
-            _check(cli.run(ctx, ["voice", str(project), "--video", vid])[0], f"voice for {vid}")
-            _check(cli.run(ctx, ["render", str(project), "--video", vid])[0], f"render for {vid}")
+        ids = ",".join(stale)
+        _check(cli.run(ctx, ["voice", str(project), "--video", ids])[0], "voice")
+        _cover_audio(ctx, project, stale)
+        _check(cli.run(ctx, ["render", str(project), "--video", ids])[0], "render")
     return body
 
 

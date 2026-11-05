@@ -8,9 +8,9 @@ import pytest
 pytest.importorskip("kokoro_onnx")
 soundfile = pytest.importorskip("soundfile")
 
-from lib.shorts.batch import read_batch, voice_fingerprint  # noqa: E402
-from lib.shorts.spec import save_spec, validate_spec  # noqa: E402
-from lib.shorts.voices import ENGINES, kokoro_available, kokoro_voices, synthesize_kokoro, validate_voice  # noqa: E402
+from lib.shorts.batch import read_batch  # noqa: E402
+from lib.shorts.spec import save_spec  # noqa: E402
+from lib.shorts.voices import ENGINES, kokoro_available, kokoro_voices, synthesize_kokoro  # noqa: E402
 from lib.shorts.whisper_align import _model  # noqa: E402
 from scripts import shorts_batch  # noqa: E402
 
@@ -82,24 +82,6 @@ def test_a_long_narration_is_not_cut_off(tmp_path):
     out = tmp_path / "long.wav"
     synthesize_kokoro({"voice": "am_michael"}, long_text, out)
     assert word_error_rate(long_text, _heard(out)) <= 0.2
-
-
-def test_validate_voice():
-    assert validate_voice({}) == [] and validate_voice({"engine": "piper", "model": "en_US-lessac-medium"}) == []
-    assert validate_voice({"engine": "kokoro", "voice": "af_heart", "speed": 1.05}) == []
-    assert validate_voice({"engine": "sapi"})
-    assert validate_voice({"engine": "kokoro", "voice": "nobody"})
-    assert validate_voice({"engine": "kokoro", "voice": "af_heart", "speed": 5})
-    assert validate_voice({"engine": "kokoro", "voice": "zf_xiaobei"})  # not an English voice
-
-
-def test_the_spec_checks_the_voice_and_a_voice_change_means_new_audio():
-    spec = {"project_id": "p", "voice": {"engine": "nope"}, "sources": {}, "videos": []}
-    assert any("voice" in v for v in validate_spec(spec, __import__("pathlib").Path("p"), "idea"))
-    video = {"id": "v1", "narration": "Hello."}
-    a = voice_fingerprint({"voice": {"engine": "piper"}}, video)
-    b = voice_fingerprint({"voice": {"engine": "kokoro", "voice": "af_heart"}}, video)
-    assert a != b
 
 
 def test_voice_command_with_kokoro_records_free_tool_and_timing(tmp_path):

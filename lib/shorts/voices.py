@@ -16,6 +16,7 @@ MODEL_FILE = MODEL_DIR / "kokoro-v1.0.int8.onnx"
 VOICES_FILE = MODEL_DIR / "voices-v1.0.bin"
 
 ENGINES = ("piper", "kokoro")
+PIPER_MODELS = ("en_US-lessac-medium",)
 ENGLISH_VOICES = (
     "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river",
     "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx",
@@ -61,6 +62,8 @@ def validate_voice(voice: Any) -> list[str]:
         if "speed" in voice and not (_number(voice["speed"]) and 0.5 <= voice["speed"] <= 1.5):
             problems.append("voice speed must be a number from 0.5 to 1.5")
     else:
+        if "model" in voice and voice["model"] not in PIPER_MODELS:
+            problems.append(f"Piper model must be one of {', '.join(PIPER_MODELS)}")
         if "length_scale" in voice and not (_number(voice["length_scale"]) and 0.5 <= voice["length_scale"] <= 2):
             problems.append("voice length_scale must be a number from 0.5 to 2")
     return problems

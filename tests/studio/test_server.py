@@ -354,3 +354,90 @@ def test_users_cannot_forge_who_wrote_or_checked(tmp_path):
     jobs.wait(bid)
     record = client.get(f"/api/batches/{bid}").json()["fact_check"]
     assert record["writer"] == "claude" and record["checker"] == "claude"
+
+
+# ---- fact check: failures are visible, the other AI can fail over, nothing silently undoes the owner's work ------
+
+
+def _fact_plan_recorder(monkeypatch, fail_factcheck=False):
+    import studio.server as srv
+
+    ran = []
+
+    def fake_plan(step, project, ai, params, cli=None):
+        def body(ctx):
+            ran.append((step, bool(params.get("factcheck"))))
+            ctx.log(f"ran {step}")
+            if fail_factcheck and params.get("factcheck"):
+                raise RuntimeError("the checker is offline")
+        return body
+
+    monkeypatch.setattr(srv, "plan_for", fake_plan)
+    monkeypatch.setattr(srv, "step_states", lambda project, running=None, failed=None: {s: "ready" for s in srv.STEPS})
+    return ran
+
+
+def test_a_failed_fact_check_is_shown_and_autopilot_still_continues(tmp_path, monkeypatch):
+    ran = _fact_plan_recorder(monkeypatch, fail_factcheck=True)
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _scripted(tmp_path, "FCFail")
+    client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H)
+    client.post(f"/api/batches/{bid}/steps/script/run", json={}, headers=H)
+    assert _poll(lambda: [s for s, _ in ran] == ["script", "script", "footage", "render", "review"] and not jobs.running(bid), timeout=90)
+    fact = client.get(f"/api/batches/{bid}").json()
+    assert fact["fact_check"]["checked"] is False
+    assert "offline" in fact["fact_check"]["error"]
+
+
+def test_a_failed_fact_check_is_named_in_the_next_step_text(tmp_path, monkeypatch):
+    _fact_plan_recorder(monkeypatch, fail_factcheck=True)
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _scripted(tmp_path, "FCFail2")
+    client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True}, headers=H)
+    jobs.wait(bid)
+    view = client.get(f"/api/batches/{bid}").json()
+    assert "fact check failed" in view["next"]["text"].lower()
+
+
+def test_fact_check_again_never_chains_into_the_later_steps(tmp_path, monkeypatch):
+    ran = _fact_plan_recorder(monkeypatch)
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _scripted(tmp_path, "FCAgain")
+    client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H)
+    client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True}, headers=H)
+    jobs.wait(bid)
+    _time.sleep(1.5)
+    assert ran == [("script", True)], ran
+    assert client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True, "_chained": True}, headers=H).status_code == 202
+    jobs.wait(bid)
+    _time.sleep(1.5)
+    assert ran == [("script", True), ("script", True)], "a request cannot ask for the chain"
+
+
+def test_when_the_other_ai_fails_the_writers_ai_checks_instead_and_it_says_so(tmp_path):
+    ok = {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "supported", "note": "n", "quote": "q"}], "narration_issues": []}]}
+    claude, codex = FakeAi({"fact_check": ok}), FakeAi({"fact_check": _AiError("not logged in")})
+    jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+    bid = _scripted(tmp_path, "FCFallback")
+    client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True}, headers=H)
+    jobs.wait(bid)
+    fact = client.get(f"/api/batches/{bid}").json()["fact_check"]
+    assert fact["checked"] is True and fact["checker"] == "claude" and fact["same_ai"] is True
+    assert "not logged in" in jobs.tail(bid, jobs.recent(bid)[0]["id"])
+    assert [c["task"] for c in codex.calls] == ["fact_check"] and [c["task"] for c in claude.calls] == ["fact_check"]
+
+
+def test_the_check_remembers_who_really_wrote_the_scripts(tmp_path):
+    scripts = {"items": [{"id": "v1", "narration": "Words here.", "claims": [{"text": "c", "sources": ["https://example.com/a"]}],
+                          "title": "T", "description": "D", "tags": ["a"]}]}
+    ok = {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "supported", "note": "n", "quote": "q"}], "narration_issues": []}]}
+    claude, codex = FakeAi({"scripts": scripts, "fact_check": ok}), FakeAi({"fact_check": ok})
+    jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+    bid = _scripted(tmp_path, "FCWriter")
+    client.post(f"/api/batches/{bid}/steps/script/run", json={}, headers=H)   # claude writes
+    assert _poll(lambda: [r["step"] for r in jobs.recent(bid)].count("script") == 2 and not jobs.running(bid))
+    client.put(f"/api/batches/{bid}/settings", json={"provider": "codex"}, headers=H)  # the owner switches AI afterwards
+    client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True}, headers=H)
+    jobs.wait(bid)
+    fact = client.get(f"/api/batches/{bid}").json()["fact_check"]
+    assert fact["writer"] == "claude" and fact["checker"] == "codex" and fact["same_ai"] is False

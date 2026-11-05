@@ -128,7 +128,7 @@ function initBatch() {
 
   async function action(fn, retry) {
     banner("");
-    try { await fn(); } catch (e) { banner(e.message, retry); }
+    try { await fn(); } catch (e) { banner(e.message, retry); settingsSig = ""; }
     await refresh(true);
   }
   const runStep = (step, params) => {
@@ -160,7 +160,7 @@ function initBatch() {
       const [engine, id] = ev.target.value.split(":");
       action(async () => {
         await api("PUT", `${base}/voice`, engine === "kokoro" ? { engine, voice: id } : { engine, model: id });
-        toast("Voice changed - the videos will be voiced and rendered again.", "ok");
+        toast("Voice changed - the videos are voiced again. If the new voice makes a video longer than its footage, Studio lengthens the last shot or tells you to redo the footage.", "ok");
       });
     } },
     ["piper", "kokoro"].map((engine) => h("optgroup", { label: engine === "piper" ? "Piper (original)" : voices[engine] && voices[engine].ready ? "Kokoro (newer, more natural)" : "Kokoro (not set up)" },
@@ -330,6 +330,7 @@ function initBatch() {
 
   function factNote() {
     const f = data.fact_check || {};
+    if (f.error) return `The last fact check failed: ${f.error}`;
     if (!f.checked) return "No fact check yet - it runs by itself after the scripts are written.";
     const who = f.same_ai ? `${f.checker} (the same AI that wrote them - a different one would be a stronger check)` : f.checker;
     return `Checked by ${who}. The AI reads the cited pages; you decide what to keep.`;

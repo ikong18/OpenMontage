@@ -88,3 +88,13 @@ def test_missing_ffmpeg_gives_clear_error(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         detect_speech_spans(tmp_path / "x.wav")
     assert "ffmpeg" in str(exc.value)
+
+
+def test_split_sentences_keeps_abbreviations_and_initials_inside_a_sentence():
+    text = "The U.S. sent 99.8 percent of Dr. Smith's probes. Mr. Jones met J. R. Ewing at St. Mary's. It ended."
+    assert split_sentences(text) == [
+        "The U.S. sent 99.8 percent of Dr. Smith's probes.",
+        "Mr. Jones met J. R. Ewing at St. Mary's.",
+        "It ended.",
+    ]
+    assert " ".join(split_sentences(text)).split() == text.split()

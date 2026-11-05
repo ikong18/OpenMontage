@@ -150,9 +150,10 @@ def write_stage_records(
     for video in spec["videos"]:
         entry = by_id[video["id"]]
         scene_id = f"{video['id']}-c1"
+        kokoro = any(c.get("tool") == "kokoro_onnx" for c in entry.get("cost_entries") or [])
         assets.append({"id": f"{video['id']}-narration", "type": "narration",
-                       "path": f"projects/{pid}/{entry['audio']}", "source_tool": "piper_tts",
-                       "scene_id": scene_id, "provider": "piper", "cost_usd": 0.0,
+                       "path": f"projects/{pid}/{entry['audio']}", "source_tool": "kokoro_onnx" if kokoro else "piper_tts",
+                       "scene_id": scene_id, "provider": "kokoro" if kokoro else "piper", "cost_usd": 0.0,
                        "duration_seconds": float(entry.get("audio_duration") or 0.0), "format": "wav"})
         assets.append({"id": f"{video['id']}-captions", "type": "subtitle",
                        "path": f"projects/{pid}/{entry['captions']}", "source_tool": "subtitle_gen",

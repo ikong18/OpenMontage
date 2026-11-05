@@ -30,8 +30,27 @@ class WordAligner(Protocol):
     def align(self, text: str, wav_path: Path) -> list[WordTiming]: ...
 
 
+_ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "inc", "ltd", "co", "no", "fig"}
+
+
+def _ends_with_abbreviation(sentence: str) -> bool:
+    words = sentence.split()
+    if not words or not words[-1].endswith("."):
+        return False
+    token = words[-1].rstrip(".").lower()
+    return token in _ABBREVIATIONS or bool(re.fullmatch(r"[a-z]", token)) or bool(re.fullmatch(r"(?:[a-z]\.)+[a-z]", token))
+
+
 def split_sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"(?<=[.?!])\s+", text.strip()) if s.strip()]
+    """Sentences by their final . ? ! - but 'Dr.', 'U.S.' and initials like 'J.' do not end one."""
+    pieces = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text.strip()) if s.strip()]
+    out: list[str] = []
+    for piece in pieces:
+        if out and _ends_with_abbreviation(out[-1]):
+            out[-1] = f"{out[-1]} {piece}"
+        else:
+            out.append(piece)
+    return out
 
 
 def _weight(word: str) -> int:
