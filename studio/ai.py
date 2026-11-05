@@ -169,7 +169,7 @@ class CodexCli:
         out_path = self.work_dir / f"answer_{run_id}.json"
         schema_path.write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
         argv = [shutil.which(self.binary) or self.binary, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
-                "-C", str(self.work_dir), "--output-schema", str(schema_path), "-o", str(out_path)]
+                "-c", "mcp_servers={}", "-C", str(self.work_dir), "--output-schema", str(schema_path), "-o", str(out_path)]
         for source in inputs.get("sources") or []:
             if isinstance(source, dict) and source.get("sheet"):
                 argv += ["-i", str(source["sheet"])]

@@ -465,3 +465,26 @@ def test_topics_research_ai_failure_leaves_spec_unchanged(batch):
         plan_for("topics", batch, FakeAi({"topic_research": AiError("offline")}), {"research": ["v1"]},
                  FakeCli(batch))(_ctx(batch))
     assert (batch / "artifacts" / "batch_spec.json").read_bytes() == before
+
+
+def test_suggest_refuses_to_replace_existing_topics_unless_told(batch):
+    spec = load_spec(batch)
+    spec["videos"] = [{"id": "v1", "topic": "typed by the owner"}]
+    save_spec(batch, spec)
+    ai = FakeAi({"topics": _topics(2)})
+    with pytest.raises(ValueError, match="already"):
+        plan_for("topics", batch, ai, {"count": 2}, FakeCli(batch))(_ctx(batch))
+    assert ai.calls == [] and load_spec(batch)["videos"][0]["topic"] == "typed by the owner"
+    plan_for("topics", batch, ai, {"count": 2, "replace": True}, FakeCli(batch))(_ctx(batch))
+    assert len(load_spec(batch)["videos"]) == 2
+
+
+def test_research_sends_the_owners_source_links_to_the_ai(batch):
+    spec = load_spec(batch)
+    spec["videos"] = [{"id": "v1", "topic": "typed", "topic_sources": ["https://owner.example/page"]}]
+    save_spec(batch, spec)
+    ai = FakeAi({"topic_research": {"items": [{"id": "v1", "topic": "typed", "hook_type": "question",
+                                               "hook_text": "Is it?", "sources": [SRC]}]}})
+    plan_for("topics", batch, ai, {"research": ["v1"]}, FakeCli(batch))(_ctx(batch))
+    assert ai.calls[0]["inputs"]["videos"][0]["topic_sources"] == ["https://owner.example/page"]
+    assert load_spec(batch)["videos"][0]["topic_sources"][0] == "https://owner.example/page"

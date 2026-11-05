@@ -109,8 +109,11 @@ def create_app(
         if step in AI_STEPS and client is None:
             raise StepError(503, "no AI client is configured for this server")
         try:
+            label = None
+            if step == "topics" and params.get("research"):
+                label = "<topics:research:" + ",".join(str(i) for i in params["research"]) + ">"
             return jobs.run_steps(batch_id, step, plan_for(step, project, client, params),
-                                  on_success=chain_after(batch_id, step, project))
+                                  on_success=chain_after(batch_id, step, project), label=label)
         except JobBusy:
             raise StepError(409, "a job is already running for this batch") from None
 
@@ -250,8 +253,7 @@ def create_app(
     @app.put("/api/batches/{batch_id}/settings", dependencies=[Depends(require_token)])
     async def put_settings(batch_id: str, body: dict = Body(default_factory=dict)) -> dict:
         project = project_or_404(batch_id)
-        if jobs.running(batch_id):
-            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        # allowed while a job runs: turning autopilot off must be able to stop a chain; each step reads it when it starts
         wanted = body.get("provider")
         if wanted in PROVIDERS and not provider_ready(wanted):
             raise HTTPException(status_code=422, detail=f"{wanted} is not set up on this server (CLI not installed)")

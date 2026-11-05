@@ -177,3 +177,13 @@ def test_apply_research_requires_every_asked_id_and_http_sources(batch):
         apply_research(spec, [_found("v1", hook_type="clickbait")], ["v1"], batch)
     with pytest.raises(ValueError, match="v9"):
         apply_research(spec, [_found("v9")], ["v9"], batch)
+
+
+def test_research_keeps_the_owners_own_source_and_hook(batch):
+    spec = _typed(batch, "typed")
+    spec["videos"][0].update({"topic_sources": ["https://owner.example/page"], "hook_type": "myth_bust", "hook_text": "My own opener."})
+    out = apply_research(spec, [_found("v1", sources=[SRC, "https://owner.example/page"])], ["v1"], batch)
+    v = out["videos"][0]
+    assert v["topic_sources"] == ["https://owner.example/page", SRC]
+    assert v["hook_type"] == "myth_bust" and v["hook_text"] == "My own opener."
+    assert v["topic"] == "Corrected topic"

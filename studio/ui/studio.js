@@ -110,6 +110,7 @@ function initBatch() {
   let lastSignature = "";
   let prevJob = null;
   let retryFn = null;
+  let settingsSig = "";
   const lastParams = {};
 
   const busy = () => !!(data && data.running);
@@ -143,16 +144,18 @@ function initBatch() {
       await api("PUT", `${base}/spec?stage=${topicSaveStage()}`, { videos: draft });
       dirty = false;
       const theme = lastParams.topics && lastParams.topics.theme ? lastParams.topics.theme : "space facts";
-      lastParams.topics = { research: ids, theme };
-      await api("POST", `${base}/steps/topics/run`, lastParams.topics);
+      await api("POST", `${base}/steps/topics/run`, { research: ids, theme });
     }, () => researchTopics(ids));
   };
   function renderSettings() {
     const s = data.settings, ready = data.providers || {};
+    const sig = JSON.stringify([s, ready]);
+    if (sig === settingsSig) return;
+    settingsSig = sig;
     const label = (p) => (p === "claude" ? "Claude" : "Codex") + (ready[p] ? "" : " (not installed)");
-    const select = h("select", { disabled: busy(), onchange: (ev) => updateSettings({ provider: ev.target.value }) },
+    const select = h("select", { onchange: (ev) => updateSettings({ provider: ev.target.value }) },
       ["claude", "codex"].map((p) => h("option", { value: p, selected: p === s.provider, disabled: !ready[p] }, label(p))));
-    const auto = h("input", { type: "checkbox", checked: s.autopilot, disabled: busy(),
+    const auto = h("input", { type: "checkbox", checked: s.autopilot,
       onchange: (ev) => updateSettings({ autopilot: ev.target.checked }) });
     $("settings").replaceChildren(
       h("label", { class: "inline" }, "AI for this batch ", select),
@@ -206,11 +209,12 @@ function initBatch() {
 
   function topicsPanel() {
     const approved = data.gates.idea === "approved";
-    const theme = h("input", { value: lastParams.topics ? lastParams.topics.theme : "space facts", disabled: approved });
-    const count = h("input", { type: "number", min: "1", max: "12", value: lastParams.topics ? lastParams.topics.count : "5", style: "width:80px", disabled: approved });
+    const theme = h("input", { value: lastParams.topics ? lastParams.topics.theme : "space facts", disabled: approved || busy() });
+    const count = h("input", { type: "number", min: "1", max: "12", value: lastParams.topics ? lastParams.topics.count : "5", style: "width:80px", disabled: approved || busy() });
     const checks = [];
     let saveBtn = null;
     let researchAllBtn = null;
+    let approveBtn = null;
     const refreshChecks = () => {
       let bad = false;
       checks.forEach((c) => {
@@ -225,6 +229,7 @@ function initBatch() {
         c.research.title = busy() ? "A job is running - wait for it to finish." : typed ? "" : "Type the topic first.";
       });
       if (researchAllBtn) researchAllBtn.disabled = busy() || incompleteTopics().length === 0;
+      if (approveBtn) approveBtn.disabled = busy() || dirty || draft.length === 0 || approved || incompleteTopics().length > 0 || bad;
       if (saveBtn) {
         saveBtn.disabled = busy() || bad || draft.length === 0;
         saveBtn.title = bad ? "Fix the highlighted topics first." : "";
@@ -235,7 +240,10 @@ function initBatch() {
       h("p", { class: "muted" }, "Ask Claude for topic ideas, edit them, then approve. Nothing is made until you approve."),
       h("div", { class: "row" },
         h("label", {}, "Theme", theme), h("label", {}, "How many", count),
-        actionButton("Suggest topics", () => runStep("topics", { theme: theme.value, count: Number(count.value) }),
+        actionButton("Suggest topics", () => {
+          if (draft.length && !confirm(`Replace the ${draft.length} topic(s) you have now with new suggestions?`)) return;
+          runStep("topics", { theme: theme.value, count: Number(count.value), ...(draft.length ? { replace: true } : {}) });
+        },
           canRun("topics") && !approved, "primary", approved ? "Topics are already approved." : reasonFor("topics"))),
     ];
     draft.forEach((v, i) => {
@@ -248,14 +256,14 @@ function initBatch() {
       checks.push({ v, node, note, chip, research });
       out.push(h("div", { class: "video" },
         h("h4", {}, v.id, chip),
-        h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved, oninput: edit(v, "topic", null, refreshChecks) })),
+        h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved || busy(), oninput: edit(v, "topic", null, refreshChecks) })),
         h("div", { class: "grid2" },
-          h("label", {}, "Hook type", h("select", { disabled: approved, onchange: edit(v, "hook_type", null, refreshChecks) },
+          h("label", {}, "Hook type", h("select", { disabled: approved || busy(), onchange: edit(v, "hook_type", null, refreshChecks) },
             [h("option", { value: "", selected: !v.hook_type }, "(research will choose)")].concat(
               HOOKS.map((t) => h("option", { value: t, selected: t === v.hook_type }, t))))),
-          h("label", {}, "Source page (link)", h("input", { value: url, disabled: approved,
+          h("label", {}, "Source page (link)", h("input", { value: url, disabled: approved || busy(),
             oninput: (ev) => { v.topic_sources = [ev.target.value]; dirty = true; refreshChecks(); } }))),
-        h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved, oninput: edit(v, "hook_text", null, refreshChecks) })),
+        h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved || busy(), oninput: edit(v, "hook_text", null, refreshChecks) })),
         node, note,
         approved ? null : h("div", { class: "row" },
           research,
@@ -274,10 +282,10 @@ function initBatch() {
         researchAllBtn,
         saveBtn));
     }
-    out.push(h("div", { class: "gate-box" },
-      actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved && incompleteTopics().length === 0, "gate",
+    approveBtn = actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved && incompleteTopics().length === 0, "gate",
         approved ? "Already approved." : dirty ? "Save your edits first." : !draft.length ? "Suggest or add topics first."
-          : incompleteTopics().length ? "Research the topics that still need sources first." : reasonFor(null)),
+          : incompleteTopics().length ? "Research the topics that still need sources first." : reasonFor(null));
+    out.push(h("div", { class: "gate-box" }, approveBtn,
       h("span", { class: "muted" }, approved ? "Approved - the scripts are written automatically." : dirty ? "Save your edits first."
         : "Your approval, not Claude's. Approving starts the scripts by itself.")));
     setTimeout(refreshChecks, 0);
@@ -516,7 +524,10 @@ function initBatch() {
   function retryJob(job) {
     const argv = job.argv || [];
     const i = argv.indexOf("--approve");
+    const research = /^<topics:research:(.+)>$/.exec(argv[0] || "");
     if (i >= 0) approve(argv[i + 1]);
+    else if (research) researchTopics(research[1].split(","));
+    else if (job.step === "topics" && !lastParams.topics) banner("Open the Topics step and use Suggest topics or Research again - Studio no longer remembers what that run was for.");
     else runStep(job.step, lastParams[job.step]);
   }
 

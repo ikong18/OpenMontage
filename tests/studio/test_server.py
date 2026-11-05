@@ -216,11 +216,13 @@ def test_unavailable_provider_cannot_be_selected(tmp_path):
     assert resp.status_code == 422 and "not set up" in resp.json()["detail"]
 
 
-def test_settings_change_refused_while_a_job_runs(tmp_path):
+def test_autopilot_can_be_switched_off_while_a_chain_is_running(tmp_path):
     jobs, client = _env_with_ai(tmp_path, FakeAi({}))
     bid = create_batch(tmp_path, "Busy2", "youtube_shorts")
-    jobs.start(bid, "render", [sys.executable, "-c", "import time; time.sleep(2)"])
-    assert client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H).status_code == 409
+    client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H)
+    jobs.start(bid, "footage", [sys.executable, "-c", "import time; time.sleep(2)"])
+    resp = client.put(f"/api/batches/{bid}/settings", json={"autopilot": False}, headers=H)
+    assert resp.status_code == 200 and resp.json()["autopilot"] is False
     jobs.wait(bid)
 
 
@@ -265,7 +267,6 @@ def test_a_failing_auto_script_stops_the_chain_and_says_why(tmp_path):
     latest = jobs.recent(bid)[0]
     assert latest["step"] == "script" and latest["status"] == "failed"
     assert "claude CLI not found" in jobs.tail(bid, latest["id"])
-    assert client.get(f"/api/batches/{bid}").json()["next"]["kind"] == "todo" or True
 
 
 def test_autopilot_chains_through_review_prep_and_never_approves_or_exports(tmp_path, monkeypatch):
@@ -291,3 +292,13 @@ def test_autopilot_chains_through_review_prep_and_never_approves_or_exports(tmp_
     assert "export" not in ran
     argvs = [r["argv"] for r in jobs.recent(bid, 20)]
     assert sum(1 for a in argvs if "--approve" in a) == 1  # the owner's topic approval only
+
+
+def test_research_job_records_which_topics_it_researches(tmp_path):
+    ai = FakeAi({"topic_research": _AiError("offline")})
+    jobs, client = _env_with_ai(tmp_path, ai)
+    bid = create_batch(tmp_path, "Label", "youtube_shorts")
+    client.put(f"/api/batches/{bid}/spec?stage=draft", json={"videos": [{"id": "v1", "topic": "a"}, {"id": "v2", "topic": "b"}]}, headers=H)
+    client.post(f"/api/batches/{bid}/steps/topics/run", json={"research": ["v1", "v2"]}, headers=H)
+    jobs.wait(bid)
+    assert jobs.recent(bid)[0]["argv"] == ["<topics:research:v1,v2>"]

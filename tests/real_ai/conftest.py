@@ -39,6 +39,12 @@ def ai(provider, tmp_path):
     return (ClaudeCli(work, timeout=900) if provider == "claude" else CodexCli(work, timeout=900))
 
 
+def visible_text(html: str) -> str:
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", html)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
 def page_status(url: str) -> tuple[int, str]:
     """(HTTP status, visible text). Status 0 = could not connect. Some sites answer scripts with 403/429 though the page exists."""
     import requests
@@ -47,9 +53,7 @@ def page_status(url: str) -> tuple[int, str]:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (OpenMontage real-AI test)"}, timeout=45)
     except requests.RequestException:
         return 0, ""
-    text = re.sub(r"(?is)<(script|style).*?</>", " ", resp.text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return resp.status_code, re.sub(r"\s+", " ", text)
+    return resp.status_code, visible_text(resp.text)
 
 
 def assert_sources_are_real(urls: list[str]) -> list[str]:
@@ -65,4 +69,6 @@ def assert_sources_are_real(urls: list[str]) -> list[str]:
 
 
 def numbers_in(text: str) -> set[str]:
-    return {m.replace(",", "") for m in re.findall(r"\d[\d,]*\.?\d*", text)}
+    """Figures with at least two digits: a lone 1 or 2 matches any page and proves nothing."""
+    found = {m.replace(",", "") for m in re.findall(r"\d[\d,]*\.?\d*", text)}
+    return {f for f in found if len(re.sub(r"\D", "", f)) >= 2}

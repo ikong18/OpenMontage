@@ -22,9 +22,9 @@ Start it from a normal terminal, not from inside a Claude Code session: the `cla
 
 ## What the AI can and cannot do
 
-The thinking steps run your own `claude -p` or `codex exec` (your subscriptions, no API keys; pick one per batch in the page header) in a separate work folder outside the repo, with a short
-tool allowlist (web pages for facts, file read for contact sheets). It returns JSON; Studio validates it and saves it.
-It cannot write files, run commands, or approve anything: only your two button clicks run the approve commands.
+The thinking steps run your own `claude -p` or `codex exec` (your subscriptions, no API keys; pick one per batch in the page header) in a separate work folder outside the repo.
+Claude gets a short tool allowlist (web pages for facts, file read for contact sheets) and none of your MCP servers. Codex runs in its read-only sandbox with your MCP servers switched off, but it has no tool allowlist: it can still read files and run read-only commands, so only point Studio at topics and pages you trust. It returns JSON; Studio validates it and saves it.
+Nothing it returns is executed, and it cannot approve anything: only your two button clicks run the approve commands.
 
 ## Safety
 

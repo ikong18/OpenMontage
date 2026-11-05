@@ -103,10 +103,14 @@ def apply_research(spec: dict[str, Any], items: list[dict[str, Any]], ids: list[
         raise ValueError(f"no research returned for {', '.join(missing)}")
     for vid in ids:
         item = found[vid]
-        sources = [str(s) for s in item.get("sources") or []]
+        mine = [str(s) for s in by_id[vid].get("topic_sources") or [] if str(s).strip()]
+        found_sources = [str(s) for s in item.get("sources") or []]
+        sources = (mine + [s for s in found_sources if s not in mine])[:4]
         _http_only(sources, vid)
         by_id[vid].update({
-            "topic": item.get("topic"), "hook_type": item.get("hook_type"), "hook_text": item.get("hook_text"),
+            "topic": item.get("topic"),
+            "hook_type": by_id[vid].get("hook_type") or item.get("hook_type"),
+            "hook_text": by_id[vid].get("hook_text") or item.get("hook_text"),
             "topic_sources": sources, "claims": [{"text": item.get("topic"), "sources": sources}],
         })
     check = copy.deepcopy(out)

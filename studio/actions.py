@@ -72,7 +72,7 @@ def _research(project: Path, ai: AiClient, params: dict[str, Any]) -> Callable[[
         ctx.log(f"asking the AI to research {len(videos)} topic(s) and find sources ...")
         result = ai.run("topic_research", {
             "theme": str(params.get("theme") or "space facts"),
-            "videos": [{k: v.get(k) for k in ("id", "topic", "hook_type", "hook_text")} for v in videos],
+            "videos": [{k: v.get(k) for k in ("id", "topic", "hook_type", "hook_text", "topic_sources")} for v in videos],
         }, SCHEMAS["topic_research"], TASK_TOOLS["topic_research"])
         save_spec(project, apply_research(spec, result.get("items") or [], ids, project))
         ctx.log("saved sources, hook type and first sentence - check them, then approve")
@@ -85,6 +85,9 @@ def _topics(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
 
     def body(ctx: JobContext) -> None:
         spec = load_spec(project)
+        if spec.get("videos") and not params.get("replace"):
+            raise ValueError(f"there are already {len(spec['videos'])} topics; suggesting again would replace them "
+                             "- confirm the replacement in the page, or use Research on the topics you typed")
         count = max(1, min(int(params.get("count") or 5), 12))
         ctx.log(f"asking claude for {count} topics ...")
         result = ai.run("topics", {

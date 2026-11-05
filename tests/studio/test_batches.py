@@ -153,3 +153,15 @@ def test_draft_stage_still_rejects_real_errors(tmp_path):
     assert edit_videos(tmp_path / bid, [{"id": "../x", "topic": "t"}], "draft")
     assert edit_videos(tmp_path / bid, [{"id": "v1", "topic": "t", "hook_type": "bogus"}], "draft")
     assert edit_videos(tmp_path / bid, [{"id": "v1", "topic": "a"}, {"id": "v1", "topic": "b"}], "draft")
+
+
+def test_mixed_draft_keeps_complete_topics_approvable(tmp_path):
+    bid = create_batch(tmp_path, "Mixed", "youtube_shorts")
+    complete = {"id": "v1", "topic": "New topic", "hook_type": "question", "hook_text": "h?", "topic_sources": ["https://new.example/1"]}
+    typed = {"id": "v2", "topic": "only typed"}
+    assert edit_videos(tmp_path / bid, [complete, typed], "draft") == []
+    saved = load_spec(tmp_path / bid)["videos"]
+    assert saved[0]["claims"] == [{"text": "New topic", "sources": ["https://new.example/1"]}]
+    complete["topic"], complete["topic_sources"] = "Newer topic", ["https://newer.example/2"]
+    edit_videos(tmp_path / bid, [complete, typed], "draft")
+    assert load_spec(tmp_path / bid)["videos"][0]["claims"] == [{"text": "Newer topic", "sources": ["https://newer.example/2"]}]

@@ -91,3 +91,11 @@ def test_typed_topics_can_be_researched_and_provider_switched():
 def test_research_buttons_follow_what_is_typed():
     js = _read("studio.js")
     assert "c.research.disabled" in js and "researchAllBtn" in js
+
+
+def test_ui_review_fixes_present():
+    js = _read("studio.js")
+    for needle in ("approveBtn", "replace: true", "settingsSig", "topics:research", "disabled: approved || busy()"):
+        assert needle in js, needle
+    settings_part = js.split("function renderSettings")[1].split("const saveVideos")[0]
+    assert "disabled: busy()" not in settings_part

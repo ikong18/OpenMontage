@@ -181,8 +181,8 @@ class JobRunner:
         return self._launch(batch_id, step, argv, lambda ctx: ctx.run(argv, cwd=cwd), on_success)
 
     def run_steps(self, batch_id: str, step: str, plan: Callable[[JobContext], None],
-                  on_success: Callable[[], None] | None = None) -> str:
-        return self._launch(batch_id, step, [f"<{step}>"], plan, on_success)
+                  on_success: Callable[[], None] | None = None, label: str | None = None) -> str:
+        return self._launch(batch_id, step, [label or f"<{step}>"], plan, on_success)
 
     def wait(self, batch_id: str, timeout: float = 30) -> None:
         thread = self._threads.get(batch_id)

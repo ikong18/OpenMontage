@@ -197,3 +197,17 @@ def test_cli_binaries_are_resolved_through_path_so_cmd_shims_work_on_windows(mon
     ClaudeCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
     CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
     assert seen == [r"C:\npm\claude.CMD", r"C:\npm\codex.CMD"]
+
+
+def test_codex_runs_without_the_owners_mcp_servers(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen["argv"] = argv
+        Path(argv[argv.index("-o") + 1]).write_text(json.dumps({"items": []}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ai_module.subprocess, "run", fake)
+    CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    argv = seen["argv"]
+    assert argv[argv.index("-c") + 1] == "mcp_servers={}"
