@@ -41,3 +41,10 @@ Direct YouTube upload is a later phase. When added it will be limited to `privat
 Fill each approved video's `title`, `description` and `tags` in `batch_spec.json`, then run
 `python scripts/shorts_batch.py export projects/<id> --approved v1,v3` (ids in posting order). It re-runs the
 audit, exports only those ids as private and writes the publish stage. Nothing is uploaded.
+
+### Platform
+
+The export follows the spec's `"platform"` (`youtube_shorts` or `facebook_reels`): it sets the platform label and
+the default hashtag (`#Shorts` / `#Reels`). `validate` checks each description against the platform's length
+and hashtag limits (conservative: 2,000 characters and 30 hashtags for `facebook_reels`). Exports are always
+marked private; upload by hand until an uploader exists.

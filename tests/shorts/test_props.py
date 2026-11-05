@@ -66,3 +66,14 @@ def test_render_video_failure_is_a_one_line_error(tmp_path):
     with pytest.raises(RuntimeError) as exc:
         render_video(_FakeRegistry(_FakeTool(ok=False)), {"cuts": []}, tmp_path / "v1.mp4")
     assert "\n" not in str(exc.value).strip()
+
+
+def test_build_props_applies_a_caption_style_override():
+    props = build_props([Path("a.mp4")], [3.0], [], Path("n.wav"), caption_style={"bottomOffset": 420})
+    assert props["captionStyle"]["bottomOffset"] == 420
+    assert props["captionStyle"]["fontSize"] == CAPTION_STYLE["fontSize"]  # untouched fields keep the default
+
+
+def test_build_props_override_does_not_mutate_the_default():
+    build_props([Path("a.mp4")], [3.0], [], Path("n.wav"), caption_style={"bottomOffset": 999})
+    assert CAPTION_STYLE["bottomOffset"] == 380

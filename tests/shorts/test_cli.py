@@ -272,3 +272,31 @@ def test_non_ascii_violation_survives_piped_stdout(project):
                           capture_output=True, cwd=REPO, env=env)
     out = proc.stdout.decode("utf-8", errors="replace")
     assert proc.returncode == 1 and "hook_type" in out and "charmap" not in out
+
+
+def test_render_uses_the_platform_caption_offset(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s.update(platform="facebook_reels"))
+    _edit_batch(project, audio_duration=4.0)
+    (project / "assets" / "audio").mkdir(parents=True, exist_ok=True)
+    (project / "assets" / "audio" / "v1.captions.json").write_text("[]", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(shorts_batch, "cut_segment", lambda src, in_s, dur, out, mode: out)
+    monkeypatch.setattr(shorts_batch, "_registry", lambda: object())
+    monkeypatch.setattr(shorts_batch, "render_video",
+                        lambda registry, props, output: seen.setdefault("props", props))
+    code, _ = _run(capsys, "render", str(project))
+    assert code == 0 and seen["props"]["captionStyle"]["bottomOffset"] == 420
+
+
+def test_render_spec_caption_style_overrides_the_platform(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s.update(platform="facebook_reels", caption_style={"bottomOffset": 560}))
+    _edit_batch(project, audio_duration=4.0)
+    (project / "assets" / "audio").mkdir(parents=True, exist_ok=True)
+    (project / "assets" / "audio" / "v1.captions.json").write_text("[]", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(shorts_batch, "cut_segment", lambda src, in_s, dur, out, mode: out)
+    monkeypatch.setattr(shorts_batch, "_registry", lambda: object())
+    monkeypatch.setattr(shorts_batch, "render_video",
+                        lambda registry, props, output: seen.setdefault("props", props))
+    code, _ = _run(capsys, "render", str(project))
+    assert code == 0 and seen["props"]["captionStyle"]["bottomOffset"] == 560

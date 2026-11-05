@@ -130,3 +130,14 @@ def test_export_refuses_when_render_is_newer_than_the_review(ready):
     with pytest.raises(ValueError) as exc:
         export_videos(projects, spec, ["v1"], _FakeRegistry())
     assert "v1" in str(exc.value) and "after the review" in str(exc.value)
+
+
+def test_export_uses_the_platform_profile(ready):
+    projects, spec = ready
+    spec["platform"] = "facebook_reels"
+    registry = _FakeRegistry()
+    export_videos(projects, spec, ["v1"], registry)
+    call = registry.tool.calls[0]
+    assert call["platform"] == "facebook_reels"
+    assert call["hashtags"] == ["#Reels"]
+    assert call["visibility"] == "private"

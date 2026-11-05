@@ -26,7 +26,11 @@ def check_cut_coverage(total_cut_seconds: float, audio_seconds: float, tolerance
 
 
 def build_props(
-    segments: list[Path], durations: list[float], captions: list[dict], narration_path: Path
+    segments: list[Path],
+    durations: list[float],
+    captions: list[dict],
+    narration_path: Path,
+    caption_style: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cuts: list[dict[str, Any]] = []
     cursor = 0.0
@@ -47,7 +51,7 @@ def build_props(
         "playbook": "shorts-captions",
         "cuts": cuts,
         "captions": captions,
-        "captionStyle": dict(CAPTION_STYLE),
+        "captionStyle": {**CAPTION_STYLE, **(caption_style or {})},
         "audio": {"narration": {"src": str(narration_path), "volume": 1.0}},
     }
 

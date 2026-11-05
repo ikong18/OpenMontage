@@ -29,6 +29,7 @@ from lib.shorts.batch import (  # noqa: E402
 from lib.shorts.checkpoints import write_idea_record, write_stage_records  # noqa: E402
 from lib.shorts.export import export_videos  # noqa: E402
 from lib.shorts.fetch import DEFAULT_MAX_MB, fetch_clip  # noqa: E402
+from lib.shorts.platforms import get_platform  # noqa: E402
 from lib.shorts.props import build_props, check_cut_coverage, render_video  # noqa: E402
 from lib.shorts.segments import cut_segment  # noqa: E402
 from lib.shorts.spec import STAGES, load_spec, save_spec, validate_spec  # noqa: E402
@@ -221,7 +222,9 @@ def cmd_render(args: argparse.Namespace) -> int:
             segments.append(segment)
             durations.append(float(cut["dur"]))
         captions = json.loads((project / entry["captions"]).read_text(encoding="utf-8"))
-        props = build_props(segments, durations, captions, project / entry["audio"])
+        platform = get_platform(spec.get("platform"))
+        style = {"bottomOffset": platform.caption_bottom_offset, **(spec.get("caption_style") or {})}
+        props = build_props(segments, durations, captions, project / entry["audio"], caption_style=style)
         registry = registry or _registry()
         render_video(registry, props, project / entry["render"])
         record_cost(batch, video["id"], "video_compose", "remotion", 0.0)

@@ -66,3 +66,15 @@ def test_render_fingerprint_changes_with_cuts_and_sources():
     spec2 = _spec()
     spec2["sources"]["a"]["mode"] = "blurpad"
     assert render_fingerprint(spec2, spec2["videos"][0]) != base
+
+
+def test_render_fingerprint_changes_with_platform_and_caption_style_but_voice_does_not():
+    spec = _spec()
+    video = spec["videos"][0]
+    render0, voice0 = render_fingerprint(spec, video), voice_fingerprint(spec, video)
+    spec["platform"] = "facebook_reels"
+    assert render_fingerprint(spec, video) != render0
+    assert voice_fingerprint(spec, video) == voice0  # no need to re-narrate for a new platform
+    spec2 = _spec()
+    spec2["caption_style"] = {"bottomOffset": 500}
+    assert render_fingerprint(spec2, spec2["videos"][0]) != render0

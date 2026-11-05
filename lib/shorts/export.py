@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.checkpoint import CheckpointValidationError, read_checkpoint, write_checkpoint
+from lib.shorts.platforms import get_platform
 
 PIPELINE = "shorts-factory"
 PLAYBOOK = "shorts-captions"
@@ -20,6 +21,7 @@ def export_videos(
     projects_dir: Path, spec: dict[str, Any], approved_ids: list[str], registry: Any
 ) -> list[dict[str, Any]]:
     pid = spec["project_id"]
+    platform = get_platform(spec.get("platform"))
     review = read_checkpoint(projects_dir, pid, "review_queue")
     if not review or review.get("status") != "completed":
         raise ValueError("review_queue is not completed; approve the batch before exporting")
@@ -42,10 +44,10 @@ def export_videos(
             "title": video["title"],
             "description": video["description"],
             "tags": video["tags"],
-            "hashtags": ["#Shorts"],
+            "hashtags": list(platform.hashtags),
             "project_name": f"{pid}-{position:02d}-{vid}",
             "export_dir": str(project_dir / "export" / f"{position:02d}-{vid}"),
-            "platform": "youtube_shorts",
+            "platform": platform.label,
             "visibility": "private",
             "subtitles_path": str(project_dir / "assets" / "audio" / f"{vid}.srt"),
         })

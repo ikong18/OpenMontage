@@ -212,3 +212,55 @@ def test_validate_stage_script_requires_narration_and_visuals_requires_cuts(tmp_
 def test_validate_unknown_stage_raises_value_error(tmp_path):
     with pytest.raises(ValueError):
         validate_spec(_spec(tmp_path), tmp_path, stage="nope")
+
+
+# --- platform profiles ---
+
+
+def test_validate_flags_unknown_platform(tmp_path):
+    spec = _spec(tmp_path)
+    spec["platform"] = "tiktok"
+    assert any("platform" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_accepts_facebook_reels(tmp_path):
+    spec = _spec(tmp_path)
+    spec["platform"] = "facebook_reels"
+    assert validate_spec(spec, tmp_path) == []
+
+
+def test_validate_flags_description_over_the_platform_limit(tmp_path):
+    spec = _spec(tmp_path)
+    spec["platform"] = "facebook_reels"
+    spec["videos"][0]["description"] = "x" * 2001
+    assert any("description" in v for v in validate_spec(spec, tmp_path))
+    spec["platform"] = "youtube_shorts"  # the same text is fine on YouTube (5000)
+    assert validate_spec(spec, tmp_path) == []
+
+
+def test_validate_flags_too_many_hashtags(tmp_path):
+    spec = _spec(tmp_path)
+    spec["platform"] = "facebook_reels"
+    spec["videos"][0]["description"] = " ".join(f"#tag{i}" for i in range(30))  # + the profile's #Reels = 31
+    assert any("hashtag" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_description_is_not_checked_before_the_final_stage(tmp_path):
+    spec = _spec(tmp_path)
+    spec["platform"] = "facebook_reels"
+    spec["videos"][0]["description"] = "x" * 5000
+    assert validate_spec(spec, tmp_path, stage="visuals") == []
+
+
+def test_validate_flags_bad_caption_style(tmp_path):
+    spec = _spec(tmp_path)
+    spec["caption_style"] = {"bottomOffset": "high", "sparkle": 1}
+    violations = validate_spec(spec, tmp_path)
+    assert any("bottomOffset" in v for v in violations)
+    assert any("sparkle" in v for v in violations)
+
+
+def test_validate_accepts_a_caption_style_override(tmp_path):
+    spec = _spec(tmp_path)
+    spec["caption_style"] = {"bottomOffset": 500, "highlightColor": "#00FFAA"}
+    assert validate_spec(spec, tmp_path) == []

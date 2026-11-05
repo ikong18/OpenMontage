@@ -24,7 +24,10 @@ def render_fingerprint(spec: dict[str, Any], video: dict[str, Any]) -> str:
     """Changes when anything that shapes the render changes (cuts, footage, narration, voice)."""
     sources = spec.get("sources") or {}
     used = {c.get("source"): sources.get(c.get("source")) for c in video.get("cuts") or []}
-    return _digest({"cuts": video.get("cuts"), "sources": used, "voice": voice_fingerprint(spec, video)})
+    return _digest({
+        "cuts": video.get("cuts"), "sources": used, "voice": voice_fingerprint(spec, video),
+        "platform": spec.get("platform") or "youtube_shorts", "caption_style": spec.get("caption_style"),
+    })
 
 
 def derive_batch(spec: dict[str, Any]) -> dict[str, Any]:

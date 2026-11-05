@@ -47,3 +47,11 @@ Run `python scripts/shorts_batch.py render projects/<id>` (or `--video v1`). It 
 1080x1920, refuses to start if the cuts are shorter than the narration, and calls `video_compose` with the
 vertical profile and `captionStyle` described above. Use the manual settings above only if you must call
 `video_compose` yourself.
+
+### Platform
+
+`batch_spec.json` has an optional top-level `"platform"`: `youtube_shorts` (default, captions 380 px from the
+bottom) or `facebook_reels` (420 px, clear of the Reels bottom UI). The runner reads it in `render`, so set it
+before rendering; changing it later makes the old renders stale and they must be rendered again. To tune the
+caption look for one batch add `"caption_style": {"bottomOffset": 480}` (keys: fontSize, wordsPerPage,
+bottomOffset, color, highlightColor, backgroundColor).

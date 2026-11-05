@@ -133,3 +133,10 @@ def test_early_directors_validate_only_their_stage():
     assert "validate projects/<id> --stage idea" in _read("idea-director")
     assert "validate projects/<id> --stage script" in _read("script-director")
     assert "validate projects/<id> --stage visuals" in _read("visuals-director")
+
+
+def test_directors_explain_the_platform_setting():
+    for skill in ("compose-director", "publish-director"):
+        text = _read(skill)
+        assert "facebook_reels" in text and '"platform"' in text, skill
+    assert "caption_style" in _read("compose-director")

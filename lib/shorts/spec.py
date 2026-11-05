@@ -7,6 +7,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from lib.shorts.platforms import PLATFORM_NAMES, get_platform
+from lib.shorts.props import CAPTION_STYLE
+
 HOOK_TYPES = ("question", "shocking_stat", "myth_bust", "comparison", "countdown")
 SPEC_FILE = Path("artifacts") / "batch_spec.json"
 MAX_TITLE = 100
@@ -69,6 +72,26 @@ def validate_spec(spec: dict[str, Any], project_dir: Path, stage: str = "full") 
             f"spec: project_id '{project_id}' does not match the folder name '{project.resolve().name}'"
         )
 
+    platform_name = spec.get("platform")
+    platform = None
+    if platform_name is not None and platform_name not in PLATFORM_NAMES:
+        violations.append(f"spec: platform '{platform_name}' is not one of {', '.join(PLATFORM_NAMES)}")
+    else:
+        platform = get_platform(platform_name)
+
+    style = spec.get("caption_style")
+    if style is not None:
+        if not isinstance(style, dict):
+            violations.append("spec: caption_style must be an object")
+        else:
+            for key, value in style.items():
+                if key not in CAPTION_STYLE:
+                    violations.append(f"spec: caption_style has unknown key '{key}'")
+                elif isinstance(CAPTION_STYLE[key], (int, float)) and not _number(value):
+                    violations.append(f"spec: caption_style {key} must be a number")
+                elif isinstance(CAPTION_STYLE[key], str) and not isinstance(value, str):
+                    violations.append(f"spec: caption_style {key} must be text")
+
     needs_sources = stage in ("visuals", "full")
     raw_sources = spec.get("sources")
     if raw_sources is None:
@@ -127,6 +150,15 @@ def validate_spec(spec: dict[str, Any], project_dir: Path, stage: str = "full") 
             violations.append(f"{label}: hook_type '{hook}' not in {', '.join(HOOK_TYPES)}")
         if len(str(video.get("title") or "")) > MAX_TITLE:
             violations.append(f"{label}: title longer than {MAX_TITLE} characters")
+        description = video.get("description")
+        if stage == "full" and platform is not None and isinstance(description, str):
+            if len(description) > platform.max_description:
+                violations.append(
+                    f"{label}: description is {len(description)} characters; {platform.name} allows {platform.max_description}"
+                )
+            tags = len(re.findall(r"#\w+", description)) + len(platform.hashtags)
+            if tags > platform.max_hashtags:
+                violations.append(f"{label}: {tags} hashtags; {platform.name} allows {platform.max_hashtags}")
 
         for claim in video.get("claims") or []:
             srcs = claim.get("sources") if isinstance(claim, dict) else None
