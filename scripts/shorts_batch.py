@@ -29,6 +29,8 @@ from lib.shorts.batch import (  # noqa: E402
 from lib.shorts.checkpoints import write_idea_record, write_stage_records  # noqa: E402
 from lib.shorts.export import export_videos  # noqa: E402
 from lib.shorts.fetch import DEFAULT_MAX_MB, fetch_clip  # noqa: E402
+from lib.shorts.fetch import _head_size  # noqa: E402
+from lib.shorts.sheets import make_contact_sheet, probe_video  # noqa: E402
 from lib.shorts.platforms import get_platform  # noqa: E402
 from lib.shorts.props import build_props, check_cut_coverage, render_video  # noqa: E402
 from lib.shorts.segments import cut_segment  # noqa: E402
@@ -137,6 +139,38 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     }
     save_spec(project, spec)
     print(f"fetched {candidate.clip_id} -> {dest}")
+    return 0
+
+
+def _search_candidates(source: str, query: str) -> list[Any]:
+    from tools.video.stock_sources import all_sources
+    from tools.video.stock_sources.base import SearchFilters
+
+    adapters = {s.name: s for s in all_sources()}
+    if source not in adapters:
+        raise ValueError(f"unknown source '{source}' (choose from {', '.join(sorted(adapters))})")
+    return list(adapters[source].search(query, SearchFilters(kind="video", per_page=12)))
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    for cand in _search_candidates(args.source, args.query):
+        size = _head_size(cand.download_url)
+        size_text = f"{size / (1024 * 1024):.1f}" if size else "?"
+        tags = " ".join(str(getattr(cand, "source_tags", "") or "").split())[:80]
+        print(f"{cand.clip_id}	{tags}	{size_text}")
+    return 0
+
+
+def cmd_sheet(args: argparse.Namespace) -> int:
+    project, _, spec = _load(args.project_dir)
+    source = (spec.get("sources") or {}).get(args.key)
+    if not isinstance(source, dict) or not source.get("path"):
+        raise ValueError(f"no source named '{args.key}' in the spec")
+    video = project / source["path"]
+    info = probe_video(video)
+    out = project / "review" / f"sheet_{args.key}.png"
+    sheet = make_contact_sheet(video, out, step=args.step)
+    print(json.dumps({"key": args.key, **sheet, **info}))
     return 0
 
 
@@ -300,6 +334,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--key", required=True)
     p.add_argument("--max-mb", type=float, default=DEFAULT_MAX_MB)
     p.add_argument("--allow-unknown-size", action="store_true")
+    p = add("search", cmd_search, "list clip candidates for a query (id, tags, size in MB)")
+    p.add_argument("--source", required=True)
+    p.add_argument("--query", required=True)
+    p = add("sheet", cmd_sheet, "make a contact sheet for one source key")
+    p.add_argument("--key", required=True)
+    p.add_argument("--step", type=float, default=4.0)
     p = add("voice", cmd_voice, "narrate and time captions")
     p.add_argument("--video")
     p = add("render", cmd_render, "cut segments and render the Shorts")

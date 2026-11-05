@@ -300,3 +300,47 @@ def test_render_spec_caption_style_overrides_the_platform(project, capsys, monke
                         lambda registry, props, output: seen.setdefault("props", props))
     code, _ = _run(capsys, "render", str(project))
     assert code == 0 and seen["props"]["captionStyle"]["bottomOffset"] == 560
+
+
+# ---- search and sheet (used by Studio) ----------------------------------------
+
+
+def test_search_prints_candidates_with_sizes(project, capsys, monkeypatch):
+    cands = [
+        SimpleNamespace(clip_id="nasa_a", source_tags="Sun flare", download_url="https://x/a.mp4"),
+        SimpleNamespace(clip_id="nasa_b", source_tags="Sun big", download_url="https://x/b.mp4"),
+    ]
+    monkeypatch.setattr(shorts_batch, "_search_candidates", lambda source, query: cands)
+    monkeypatch.setattr(shorts_batch, "_head_size", lambda url: 5 * 1024 * 1024 if url.endswith("a.mp4") else None)
+    code, out = _run(capsys, "search", str(project), "--source", "nasa", "--query", "sun")
+    assert code == 0
+    lines = out.strip().splitlines()
+    assert lines[0].split("\t") == ["nasa_a", "Sun flare", "5.0"]
+    assert lines[1].split("\t") == ["nasa_b", "Sun big", "?"]
+
+
+def test_search_unknown_source_is_one_line_error(project, capsys):
+    code, out = _run(capsys, "search", str(project), "--source", "bogus", "--query", "sun")
+    assert code == 1 and out.startswith("error:") and _one_line(out)
+
+
+def test_sheet_command_writes_png_for_source_key(project, capsys, monkeypatch):
+    seen = {}
+
+    def fake_sheet(video, out, step=4.0, cols=6, rows=5, thumb_width=240):
+        seen.update(video=video, out=out, step=step)
+        return {"path": str(out), "step": step, "cols": cols, "frames": 3}
+
+    monkeypatch.setattr(shorts_batch, "make_contact_sheet", fake_sheet)
+    monkeypatch.setattr(shorts_batch, "probe_video", lambda p: {"width": 1280, "height": 720, "duration": 12.0})
+    code, out = _run(capsys, "sheet", str(project), "--key", "a", "--step", "5")
+    info = json.loads(out.strip().splitlines()[-1])
+    assert code == 0 and seen["step"] == 5.0
+    assert Path(seen["out"]) == project / "review" / "sheet_a.png"
+    assert Path(seen["video"]) == project / "assets" / "video" / "a.mp4"
+    assert info["key"] == "a" and info["width"] == 1280 and info["frames"] == 3
+
+
+def test_sheet_unknown_key_errors_one_line(project, capsys):
+    code, out = _run(capsys, "sheet", str(project), "--key", "nope")
+    assert code == 1 and out.startswith("error:") and _one_line(out)
