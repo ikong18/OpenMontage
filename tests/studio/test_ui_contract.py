@@ -117,3 +117,8 @@ def test_voice_toast_is_honest_and_a_failed_change_resets_the_picker():
     js = _read("studio.js")
     assert "longer than its footage" in js
     assert 'settingsSig = ""' in js
+
+
+def test_ui_warns_when_the_server_is_running_old_code():
+    js = _read("studio.js")
+    assert "code_stale" in js and "start it again" in js

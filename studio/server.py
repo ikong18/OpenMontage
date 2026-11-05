@@ -32,6 +32,22 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 SSE_HEARTBEAT_SECONDS = 15
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CODE_ROOTS = [REPO_ROOT / "studio", REPO_ROOT / "lib" / "shorts", REPO_ROOT / "scripts" / "shorts_batch.py"]
+
+
+def latest_code_mtime(roots: list[Path]) -> float:
+    """Newest change among the files that make up Studio (code, pages, prompts)."""
+    latest = 0.0
+    for root in roots:
+        for path in ([root] if root.is_file() else root.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            if path.suffix in (".py", ".js", ".html", ".css") or (path.suffix == ".md" and "prompts" in path.parts):
+                latest = max(latest, path.stat().st_mtime)
+    return latest
+
+
 PREVIEW_TEXT = "Venus is hotter than Mercury, even though Mercury is closer to the Sun."
 PIPER_DEFAULT = {"engine": "piper", "model": "en_US-lessac-medium", "length_scale": 0.95}
 _ACCENT = {"af": "US female", "am": "US male", "bf": "British female", "bm": "British male"}
@@ -56,6 +72,7 @@ def create_app(
     ai: Optional[AiClient] = None,
     token: Optional[str] = None,
     providers: Optional[dict[str, AiClient]] = None,
+    watch: Optional[list[Path]] = None,
 ) -> FastAPI:
     projects_dir = Path(projects_dir)
     clients: dict[str, AiClient] = dict(providers or {})
@@ -68,6 +85,13 @@ def create_app(
     async def lifespan(_app: FastAPI):
         jobs.recover_all()
         yield
+
+    code_roots = [Path(p) for p in (watch if watch is not None else CODE_ROOTS)]
+    started_code = latest_code_mtime(code_roots)
+
+    def code_stale() -> bool:
+        """True when Studio's files changed after this copy started: the running copy is old and must be restarted."""
+        return latest_code_mtime(code_roots) > started_code + 0.5
 
     app = FastAPI(title="Studio", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -208,6 +232,7 @@ def create_app(
             "gates": gates,
             "settings": load_settings(project),
             "providers": {name: provider_ready(name) for name in PROVIDERS},
+            "code_stale": code_stale(),
             "fact_check": fact,
             "voice": {"engine": "piper", **(spec.get("voice") or PIPER_DEFAULT)},
             "voices": voice_catalog(),
@@ -243,7 +268,7 @@ def create_app(
     # ---- api -----------------------------------------------------------
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "app": "studio"}
+        return {"ok": True, "app": "studio", "code_stale": code_stale()}
 
     @app.get("/api/batches")
     async def batches() -> list:

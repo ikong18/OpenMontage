@@ -625,6 +625,9 @@ function initBatch() {
     announceFinished();
     updateTitle();
     renderSettings();
+    if (data.code_stale && $("banner").hidden) {
+      banner("Studio was updated after this copy started, so this page may be running old code. Close the Studio window and start it again (Studio.bat).");
+    }
     const signature = JSON.stringify([data.steps, data.gates, data.spec, data.running, (data.jobs || [])[0], data.renders, data.exports, data.next]);
     if (force || signature !== lastSignature) {
       lastSignature = signature;

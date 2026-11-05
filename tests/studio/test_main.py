@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import studio.__main__ as cli
 from studio.ai import ClaudeCli
 
@@ -96,3 +97,11 @@ def test_build_app_offers_claude_and_codex(tmp_path):
     clients = app.state.clients
     assert isinstance(clients["claude"], ClaudeCli) and isinstance(clients["codex"], CodexCli)
     assert clients["claude"].work_dir == clients["codex"].work_dir == tmp_path / "w"
+
+
+def test_serve_refuses_to_start_a_second_copy_and_says_why(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_server_alive", lambda port: True)
+    monkeypatch.setattr(cli, "build_app", lambda *a, **k: pytest.fail("must not start a second server"))
+    assert cli.cmd_serve(4760) == 1
+    out = capsys.readouterr().out
+    assert "already running" in out and "close" in out.lower()

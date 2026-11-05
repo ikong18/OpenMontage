@@ -441,3 +441,20 @@ def test_the_check_remembers_who_really_wrote_the_scripts(tmp_path):
     jobs.wait(bid)
     fact = client.get(f"/api/batches/{bid}").json()["fact_check"]
     assert fact["writer"] == "claude" and fact["checker"] == "codex" and fact["same_ai"] is False
+
+
+# ---- a server running old code must say so -----------------------------------------------------------------------
+
+
+def test_the_server_notices_when_its_own_code_changed_after_it_started(tmp_path):
+    watched = tmp_path / "code"
+    watched.mkdir()
+    (watched / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    app = create_app(tmp_path / "projects", token=TOKEN, watch=[watched])
+    client = TestClient(app, base_url="http://127.0.0.1:4760")
+    assert client.get("/api/health").json()["code_stale"] is False
+    _time.sleep(1.1)
+    (watched / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    assert client.get("/api/health").json()["code_stale"] is True
+    bid = create_batch(tmp_path / "projects", "Stale", "youtube_shorts")
+    assert client.get(f"/api/batches/{bid}").json()["code_stale"] is True

@@ -102,6 +102,10 @@ def _open_when_ready(port: int, timeout: float = 30.0) -> bool:
 def cmd_serve(port: int, open_browser: bool = False) -> int:
     import uvicorn
 
+    if _server_alive(port):
+        print(f"studio: a copy of Studio is already running on port {port}. Close that window (or stop that program) first, "
+              "otherwise the browser keeps talking to the old copy and it may not have your latest fixes.")
+        return 1
     print(f"studio: http://127.0.0.1:{port}/  (Ctrl+C to stop)")
     if open_browser:
         threading.Thread(target=_open_when_ready, args=(port,), daemon=True).start()
