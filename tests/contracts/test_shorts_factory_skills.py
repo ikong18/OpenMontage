@@ -79,3 +79,9 @@ def test_idea_director_presents_both_runtimes_and_records_decision():
 def test_compose_director_routes_by_runtime():
     text = _read("compose-director")
     assert "render_runtime" in text and "HyperFrames" in text
+
+
+def test_compose_director_sets_vertical_profile_and_caption_style():
+    text = _read("compose-director")
+    for needle in ("youtube_shorts", "captionStyle", "bottomOffset", "wordsPerPage"):
+        assert needle in text

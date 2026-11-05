@@ -25,3 +25,11 @@ def test_explainer_falls_back_to_previous_defaults():
 def test_caption_overlay_bottom_offset_defaults_to_80():
     assert "bottomOffset = 80" in OVERLAY
     assert "paddingBottom: bottomOffset" in OVERLAY
+
+
+def test_color_overrides_keep_theme_literals_at_the_call_site():
+    """test_theme_text_contrast_contract requires the theme colours at the call
+    site; captionStyle colours are applied inside CaptionOverlay instead."""
+    assert "colorOverrides={captionStyle}" in EXPLAINER
+    assert "colorOverrides?.color ?? color" in OVERLAY
+    assert "colorOverrides?.highlightColor ?? highlightColor" in OVERLAY

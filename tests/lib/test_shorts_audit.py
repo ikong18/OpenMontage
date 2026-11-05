@@ -78,3 +78,48 @@ def test_main_exit_codes(tmp_path, monkeypatch, capsys):
     _write_batch(dirty, [_video(1, "question"), _video(2, "myth_bust")], render=False)
     assert shorts_audit.main([str(dirty)]) == 1
     assert "missing render: v1" in capsys.readouterr().out
+
+
+# --- review fixes: the audit reports problems instead of crashing ---
+
+def test_audit_reports_video_without_id(tmp_path):
+    video = _video(1, "question")
+    del video["id"]
+    _write_batch(tmp_path, [video, _video(2, "myth_bust")], render=False)
+    result = shorts_audit.audit_project(tmp_path, probe=_good_probe)
+    assert result["ok"] is False
+    assert any("missing id" in v for v in result["violations"])
+
+
+def test_audit_reports_unprobeable_render(tmp_path):
+    _write_batch(tmp_path, [_video(1, "question"), _video(2, "myth_bust")])
+
+    def broken_probe(_path):
+        raise RuntimeError("ffprobe exploded")
+
+    result = shorts_audit.audit_project(tmp_path, probe=broken_probe)
+    assert result["ok"] is False
+    assert "unprobeable render: v1" in result["violations"]
+
+
+def test_audit_reports_duplicate_video_ids(tmp_path):
+    _write_batch(tmp_path, [_video(1, "question"), _video(1, "myth_bust")])
+    result = shorts_audit.audit_project(tmp_path, probe=_good_probe)
+    assert result["ok"] is False
+    assert any("duplicate video id" in v for v in result["violations"])
+
+
+def test_load_batch_accepts_utf8_bom(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "shorts_batch.json").write_bytes(b"\xef\xbb\xbf" + json.dumps({"videos": []}).encode("utf-8"))
+    assert shorts_audit.load_batch(tmp_path) == {"videos": []}
+
+
+@pytest.mark.parametrize("content", ["{not json", "[]"])
+def test_main_reports_malformed_batch_without_traceback(tmp_path, capsys, content):
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "shorts_batch.json").write_text(content, encoding="utf-8")
+    assert shorts_audit.main([str(tmp_path)]) == 1
+    assert "shorts_batch.json" in capsys.readouterr().out

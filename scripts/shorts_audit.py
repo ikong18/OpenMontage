@@ -25,7 +25,13 @@ def load_batch(project_dir: Path) -> dict[str, Any]:
     path = Path(project_dir) / BATCH_FILE
     if not path.exists():
         raise FileNotFoundError(f"batch file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a JSON object with a 'videos' list")
+    return data
 
 
 def probe_render(path: Path) -> dict[str, Any]:
@@ -55,13 +61,25 @@ def audit_project(
     probes: dict[str, dict] = {}
     missing: list[str] = []
     cost_entries: list[dict] = []
-    for video in batch.get("videos") or []:
-        render = project_dir / str(video.get("render", ""))
-        if render.is_file():
-            probes[video["id"]] = probe(render)
-        else:
-            missing.append(f"missing render: {video.get('id', '?')}")
+    seen_ids: set[str] = set()
+    for index, video in enumerate(batch.get("videos") or []):
+        video_id = video.get("id")
         cost_entries.extend(video.get("cost_entries") or [])
+        if not video_id:
+            missing.append(f"video at index {index}: missing id")
+            continue
+        if video_id in seen_ids:
+            missing.append(f"duplicate video id: {video_id}")
+            continue
+        seen_ids.add(video_id)
+        render = project_dir / str(video.get("render", ""))
+        if not render.is_file():
+            missing.append(f"missing render: {video_id}")
+            continue
+        try:
+            probes[video_id] = probe(render)
+        except Exception:
+            missing.append(f"unprobeable render: {video_id}")
     result = run_all(batch, probes, cost_entries)
     violations = missing + result["violations"]
     return {"ok": not violations, "violations": violations}
@@ -72,7 +90,11 @@ def main(argv: list[str] | None = None) -> int:
     if len(args) != 1:
         print("usage: python scripts/shorts_audit.py <project_dir>")
         return 2
-    result = audit_project(Path(args[0]), probe=probe_render)
+    try:
+        result = audit_project(Path(args[0]), probe=probe_render)
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc))
+        return 1
     for violation in result["violations"]:
         print(violation)
     if result["ok"]:

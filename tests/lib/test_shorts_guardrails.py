@@ -149,3 +149,42 @@ def test_run_all_passes_clean_batch():
     }
     cost = [{"tool": "piper_tts", "provider": "piper", "cost_usd": 0.0}]
     assert run_all(batch, probes, cost) == {"ok": True, "violations": []}
+
+
+# --- review fixes: provider allowlist, negative cost, malformed input never raises ---
+
+def test_zero_cost_rejects_paid_provider_even_at_zero():
+    paid = [{"tool": "elevenlabs_tts", "provider": "elevenlabs", "cost_usd": 0.0}]
+    result = check_zero_cost(paid)
+    assert result["ok"] is False
+    assert any("elevenlabs" in v for v in result["violations"])
+
+
+def test_zero_cost_rejects_negative_and_non_numeric_cost():
+    assert check_zero_cost([{"tool": "t", "provider": "piper", "cost_usd": -1}])["ok"] is False
+    assert check_zero_cost([{"tool": "t", "provider": "piper", "cost_usd": "0.5"}])["ok"] is False
+
+
+def test_zero_cost_accepts_known_free_providers():
+    for provider in ("piper", "openmontage", "remotion", "ffmpeg"):
+        assert check_zero_cost([{"tool": "t", "provider": provider, "cost_usd": 0.0}])["ok"] is True
+
+
+def test_short_specs_non_numeric_duration_is_a_violation():
+    probes = {"a": {"width": 1080, "height": 1920, "duration": "N/A"}}
+    assert check_short_specs(probes)["ok"] is False
+
+
+def test_fact_sources_tolerates_malformed_claims():
+    video = _video(1)
+    video["claims"] = [{"text": None, "sources": []}, "just a string"]
+    result = check_fact_sources([video])
+    assert result["ok"] is False
+
+
+def test_footage_reuse_reports_missing_clip_id():
+    video = _video(1)
+    del video["clips"][0]["clip_id"]
+    result = check_footage_reuse([video, _video(2)])
+    assert result["ok"] is False
+    assert any("missing clip_id" in v for v in result["violations"])

@@ -39,6 +39,8 @@ type CaptionOverlayProps = {
   // Distance from the bottom edge in px (default 80). Vertical Shorts raise
   // this to clear the platform UI.
   bottomOffset?: number;
+  // Optional per-render colour overrides; omitted fields keep the props above.
+  colorOverrides?: { color?: string; highlightColor?: string; backgroundColor?: string };
 };
 
 const RTL_CHAR = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
@@ -177,6 +179,7 @@ export const CaptionOverlay: React.FC<CaptionOverlayProps> = ({
   wordSeparator = " ",
   direction = "auto",
   bottomOffset = 80,
+  colorOverrides,
 }) => {
   const { fps } = useVideoConfig();
   const pages = buildPages(words, wordsPerPage);
@@ -198,9 +201,9 @@ export const CaptionOverlay: React.FC<CaptionOverlayProps> = ({
             <PageRenderer
               page={page}
               fontSize={fontSize}
-              color={color}
-              highlightColor={highlightColor}
-              backgroundColor={backgroundColor}
+              color={colorOverrides?.color ?? color}
+              highlightColor={colorOverrides?.highlightColor ?? highlightColor}
+              backgroundColor={colorOverrides?.backgroundColor ?? backgroundColor}
               fontFamily={fontFamily}
               wordSeparator={wordSeparator}
               direction={resolvedDirection}

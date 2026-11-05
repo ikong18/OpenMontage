@@ -22,7 +22,7 @@ Read `render_runtime` from the approved `render_runtime_selection` decision (loc
 
 ### 1. Render
 
-Use `video_compose` at 1080x1920 with the `shorts-captions` playbook. Output to `renders/<id>.mp4` inside the project directory. The runtime was already presented and locked at the `idea` gate.
+Use `video_compose` with `operation: "remotion_render"` and `profile: "youtube_shorts"` (this is what makes the render 1080x1920; the Explainer composition defaults to landscape). Set `playbook: "shorts-captions"` in the composition props and apply the playbook's caption look with `captionStyle: {"fontSize": 84, "wordsPerPage": 4, "bottomOffset": 380, "highlightColor": "#FACC15"}` (without it captions fall back to 42 px, 6 words and 80 px from the bottom, which breaks the safe zone). Output to `renders/<id>.mp4` inside the project directory. The runtime was already presented and locked at the `idea` gate.
 
 ### 2. Verify each render
 
