@@ -15,6 +15,7 @@ Start it from a normal terminal, not from inside a Claude Code session: the `cla
 
 1. **Topics** - Claude (or Codex) suggests topics, or you type your own and click **Research this topic**: the AI finds source pages, picks the hook type and writes the first sentence. You edit, then click **Approve topics**, which also starts the scripts by itself.
 2. **Script** - written automatically after you approve the topics: narration, claims (each with a source the AI opened) and posting text. You read and edit. Tick **Keep going automatically** to also run footage, voice and render, stopping before Review.
+   Right after the scripts, the *other* AI (Codex if Claude wrote them, and the reverse) opens every cited page and marks each claim supported, partly, not supported or could-not-check, with the quote it found. You see this next to each claim; it never blocks you, you decide. If only one AI is installed, the same one checks and Studio says so.
 3. **Footage** - clips are downloaded (size-capped), Claude proposes cuts from contact sheets; you can change any cut.
 4. **Voice and render** - narration and 1080x1920 renders (a few minutes per video).
 5. **Review** - watch each video, Redo any you do not like, then click **Approve batch**.
