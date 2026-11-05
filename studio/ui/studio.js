@@ -135,6 +135,29 @@ function initBatch() {
     return action(() => api("POST", `${base}/steps/${step}/run`, params || {}), () => runStep(step, params));
   };
   const approve = (gate) => action(() => api("POST", `${base}/gates/${gate}/approve`, {}), () => approve(gate));
+  const updateSettings = (patch) => action(() => api("PUT", `${base}/settings`, patch));
+  const researchTopics = (ids) => {
+    if (!ids.length) return;
+    // typed topics are saved as a draft first, then the AI finds sources, hook type and first sentence
+    return action(async () => {
+      await api("PUT", `${base}/spec?stage=${topicSaveStage()}`, { videos: draft });
+      dirty = false;
+      const theme = lastParams.topics && lastParams.topics.theme ? lastParams.topics.theme : "space facts";
+      lastParams.topics = { research: ids, theme };
+      await api("POST", `${base}/steps/topics/run`, lastParams.topics);
+    }, () => researchTopics(ids));
+  };
+  function renderSettings() {
+    const s = data.settings, ready = data.providers || {};
+    const label = (p) => (p === "claude" ? "Claude" : "Codex") + (ready[p] ? "" : " (not installed)");
+    const select = h("select", { disabled: busy(), onchange: (ev) => updateSettings({ provider: ev.target.value }) },
+      ["claude", "codex"].map((p) => h("option", { value: p, selected: p === s.provider, disabled: !ready[p] }, label(p))));
+    const auto = h("input", { type: "checkbox", checked: s.autopilot, disabled: busy(),
+      onchange: (ev) => updateSettings({ autopilot: ev.target.checked }) });
+    $("settings").replaceChildren(
+      h("label", { class: "inline" }, "AI for this batch ", select),
+      h("label", { class: "inline" }, auto, " Keep going automatically after the scripts (footage, voice and render). I still approve the topics and the final batch myself."));
+  }
   const saveVideos = (stage) => action(async () => {
     await api("PUT", `${base}/spec?stage=${stage}`, { videos: draft });
     dirty = false;
@@ -168,14 +191,18 @@ function initBatch() {
   };
 
   /* ---- topics */
-  const validateTopic = (v) => {
-    const m = [];
-    if (!String(v.topic || "").trim()) m.push("Add a topic.");
-    if (!HOOKS.includes(v.hook_type)) m.push("Pick a hook type.");
-    if (!String(v.hook_text || "").trim()) m.push("Write the first spoken sentence.");
-    if (!isHttp((v.topic_sources || [])[0])) m.push("Add a source page: a link that starts with http or https.");
-    return m;
+  /* fatal = cannot be saved; missing = saved as a draft, researched before approval */
+  const topicIssues = (v) => {
+    const fatal = [], missing = [];
+    if (!String(v.topic || "").trim()) fatal.push("Type the topic.");
+    if (!HOOKS.includes(v.hook_type)) missing.push("hook type");
+    if (!String(v.hook_text || "").trim()) missing.push("first spoken sentence");
+    if (!isHttp((v.topic_sources || [])[0])) missing.push("source page");
+    return { fatal, missing };
   };
+  const validateTopic = (v) => { const i = topicIssues(v); return i.fatal; };
+  const incompleteTopics = () => draft.filter((v) => topicIssues(v).missing.length > 0 && topicIssues(v).fatal.length === 0);
+  const topicSaveStage = () => (draft.some((v) => topicIssues(v).missing.length) ? "draft" : "idea");
 
   function topicsPanel() {
     const approved = data.gates.idea === "approved";
@@ -186,11 +213,12 @@ function initBatch() {
     const refreshChecks = () => {
       let bad = false;
       checks.forEach((c) => {
-        const problems = validateTopic(c.v);
-        bad = bad || problems.length > 0;
-        c.node.textContent = problems.join(" ");
-        c.chip.textContent = c.v.hook_type;
-        c.chip.className = "chip " + c.v.hook_type;
+        const issues = topicIssues(c.v);
+        bad = bad || issues.fatal.length > 0;
+        c.node.textContent = issues.fatal.join(" ");
+        c.note.textContent = issues.missing.length && !issues.fatal.length ? "Not researched yet - still needs: " + issues.missing.join(", ") + "." : "";
+        c.chip.textContent = c.v.hook_type || "no hook yet";
+        c.chip.className = "chip " + (c.v.hook_type || "");
       });
       if (saveBtn) {
         saveBtn.disabled = busy() || bad || draft.length === 0;
@@ -209,33 +237,42 @@ function initBatch() {
       const url = (v.topic_sources || [])[0] || "";
       const chip = h("span", { class: "chip " + v.hook_type }, v.hook_type);
       const node = h("div", { class: "error small" });
-      checks.push({ v, node, chip });
+      const note = h("div", { class: "muted small" });
+      checks.push({ v, node, note, chip });
       out.push(h("div", { class: "video" },
         h("h4", {}, v.id, chip),
         h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved, oninput: edit(v, "topic", null, refreshChecks) })),
         h("div", { class: "grid2" },
           h("label", {}, "Hook type", h("select", { disabled: approved, onchange: edit(v, "hook_type", null, refreshChecks) },
-            HOOKS.map((t) => h("option", { value: t, selected: t === v.hook_type }, t)))),
+            [h("option", { value: "", selected: !v.hook_type }, "(research will choose)")].concat(
+              HOOKS.map((t) => h("option", { value: t, selected: t === v.hook_type }, t))))),
           h("label", {}, "Source page (link)", h("input", { value: url, disabled: approved,
             oninput: (ev) => { v.topic_sources = [ev.target.value]; dirty = true; refreshChecks(); } }))),
         h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved, oninput: edit(v, "hook_text", null, refreshChecks) })),
-        node,
-        approved ? null : actionButton("Remove", () => { draft.splice(i, 1); dirty = true; renderPanel(true); }, true)));
+        node, note,
+        approved ? null : h("div", { class: "row" },
+          actionButton("Research this topic", () => researchTopics([v.id]), !busy() && !!String(v.topic || "").trim(), "primary",
+            busy() ? reasonFor(null) : "Type the topic first."),
+          actionButton("Remove", () => { draft.splice(i, 1); dirty = true; renderPanel(true); }, true))));
     });
     if (!approved) {
-      saveBtn = actionButton("Save edits", () => saveVideos("idea"), !busy() && draft.length > 0, "", reasonFor(null));
+      saveBtn = actionButton("Save edits", () => saveVideos(topicSaveStage()), !busy() && draft.length > 0, "", reasonFor(null));
       out.push(h("div", { class: "row" },
         actionButton("Add topic", () => {
           const n = Math.max(0, ...draft.map((v) => Number(String(v.id).replace(/\D/g, "")) || 0)) + 1;
-          draft.push({ id: "v" + n, topic: "", hook_type: "question", hook_text: "", topic_sources: [""] });
+          draft.push({ id: "v" + n, topic: "", hook_type: "", hook_text: "", topic_sources: [] });
           dirty = true; renderPanel(true);
         }, !busy(), "", reasonFor(null)),
+        actionButton("Research all incomplete", () => researchTopics(incompleteTopics().map((v) => v.id)),
+          !busy() && incompleteTopics().length > 0, "", busy() ? reasonFor(null) : "Every topic already has sources."),
         saveBtn));
     }
     out.push(h("div", { class: "gate-box" },
-      actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved, "gate",
-        approved ? "Already approved." : dirty ? "Save your edits first." : draft.length ? reasonFor(null) : "Suggest or add topics first."),
-      h("span", { class: "muted" }, approved ? "Approved." : dirty ? "Save your edits first." : "Your approval, not Claude's.")));
+      actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved && incompleteTopics().length === 0, "gate",
+        approved ? "Already approved." : dirty ? "Save your edits first." : !draft.length ? "Suggest or add topics first."
+          : incompleteTopics().length ? "Research the topics that still need sources first." : reasonFor(null)),
+      h("span", { class: "muted" }, approved ? "Approved - the scripts are written automatically." : dirty ? "Save your edits first."
+        : "Your approval, not Claude's. Approving starts the scripts by itself.")));
     setTimeout(refreshChecks, 0);
     return out;
   }
@@ -512,6 +549,7 @@ function initBatch() {
     if (!selected) selected = data.next.kind === "done" ? "export" : data.next.step;
     announceFinished();
     updateTitle();
+    renderSettings();
     const signature = JSON.stringify([data.steps, data.gates, data.spec, data.running, (data.jobs || [])[0], data.renders, data.exports, data.next]);
     if (force || signature !== lastSignature) {
       lastSignature = signature;

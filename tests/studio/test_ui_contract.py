@@ -78,3 +78,11 @@ def test_css_has_spinner_toast_and_focus_styles():
     css = _read("studio.css")
     for needle in (".spinner", ".toast", ":focus-visible", ".seg", ".bad"):
         assert needle in css, needle
+
+
+def test_typed_topics_can_be_researched_and_provider_switched():
+    js, html = _read("studio.js"), _read("batch.html")
+    for needle in ("Research this topic", "Research all incomplete", "researchTopics", '"draft"', "/settings", "autopilot",
+                   "topicIssues", "Approving starts the scripts by itself"):
+        assert needle in js, needle
+    assert 'id="settings"' in html
