@@ -237,8 +237,8 @@ def create_app(
                                 flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale")),
                                 fact_error=fact.get("error"))
         blockers = render_blockers(project, spec, [v["id"] for v in spec.get("videos") or [] if v.get("cuts")])
-        if blockers and not running and steps.get("footage") == "done" and steps.get("render") != "done":
-            next_info = {"kind": "todo", "step": "footage", "text": "Before the videos are made: " + blockers[0]}
+        if blockers and not running and steps.get("footage") == "done":
+            next_info = {"kind": "todo", "step": "footage", "text": "Footage problem: " + blockers[0]}
         return {
             "id": batch_id,
             "platform": spec.get("platform") or "youtube_shorts",
@@ -252,6 +252,7 @@ def create_app(
             "voice": {"engine": "piper", **(spec.get("voice") or PIPER_DEFAULT)},
             "voices": voice_catalog(),
             "footage_check": footage,
+            "footage_blockers": blockers,
             "next": next_info,
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
             "source_info": source_info(project, spec),

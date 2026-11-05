@@ -569,10 +569,11 @@ function initBatch() {
           if (confirm(`Redo ${v.id}? Its cuts and render are cleared.`)) action(() => api("POST", `${base}/videos/${encodeURIComponent(v.id)}/redo`, { note: note.value || "redo" }));
         }, !busy(), "", reasonFor(null)))));
     });
-    const ready = !busy() && data.steps.render === "done" && data.gates.review_queue === "awaiting";
+    const footageProblem = (data.footage_blockers || [])[0];
+    const ready = !busy() && data.steps.render === "done" && data.gates.review_queue === "awaiting" && !footageProblem;
     out.push(h("div", { class: "gate-box" },
       actionButton("Approve batch", () => approve("review_queue"), ready, "gate",
-        busy() ? reasonFor(null) : data.steps.render !== "done" ? "Make the videos first." : "Run Prepare review first."),
+        busy() ? reasonFor(null) : footageProblem ? "Footage problem: " + footageProblem : data.steps.render !== "done" ? "Make the videos first." : "Run Prepare review first."),
       h("span", { class: "muted" }, data.gates.review_queue === "approved" ? "Approved." : "Run Prepare review first. Your approval, not Claude's.")));
     return out;
   }

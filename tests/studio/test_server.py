@@ -571,3 +571,18 @@ def test_a_rejected_shot_is_the_next_thing_the_owner_is_told(tmp_path):
     view = client.get(f"/api/batches/{bid}").json()
     assert view["next"]["step"] == "footage" and "does not show" in view["next"]["text"]
     assert view["footage_check"]["videos"]["v1"]["blocked"] == 1
+
+
+def test_a_rendered_video_with_rejected_footage_still_shows_the_footage_problem_first(tmp_path):
+    from studio.footage import apply_review, save_check
+
+    jobs, client = _env_with_ai(tmp_path, FakeAi({}))
+    bid = _footage_batch(tmp_path, "FootRendered")
+    project = tmp_path / bid
+    spec = load_spec(project)
+    save_check(project, apply_review(spec, [{"id": "v1", "cuts": [{"index": 0, "verdict": "no", "shows": "a man on a stage"}]}], "claude", "codex", {}))
+    (project / "renders").mkdir(exist_ok=True)
+    (project / "renders" / "v1.mp4").write_bytes(b"r")
+    view = client.get(f"/api/batches/{bid}").json()
+    assert view["footage_blockers"] and "does not show" in view["footage_blockers"][0]
+    assert view["next"]["step"] == "footage" and "does not show" in view["next"]["text"]

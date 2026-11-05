@@ -458,3 +458,56 @@ def test_a_frame_the_ai_could_not_open_is_an_error_not_a_verdict(batch, tmp_path
 
     with pytest.raises(AiError, match="could not open"):
         run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers(footage_review=claims_missing)), "codex", "claude"))
+
+
+# ---- an already-rendered video with bad footage must not be approved or exported either ---------------------------------
+
+
+def _rendered_with_bad_footage(batch, tmp_path, monkeypatch, verdicts=("yes", "no", "yes", "yes")):
+    import studio.actions as actions
+    from studio.footage import apply_review, save_check
+
+    run(batch, tmp_path, ScriptedAi(handlers()), Cli(batch, RESULTS), reviewer=(ScriptedAi(handlers()), "codex", "claude"))
+    spec = load_spec(batch)
+    save_check(batch, apply_review(spec, [{"id": "v1", "cuts": [{"index": i, "verdict": v, "shows": "x"} for i, v in enumerate(verdicts)]}],
+                                   "claude", "codex", {}))
+    (batch / "checkpoint_review_queue.json").write_text(json.dumps(
+        {"stage": "review_queue", "status": "awaiting_human", "human_approved": False, "timestamp": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+    monkeypatch.setattr(actions, "step_states", lambda project, running=None, failed=None: {"render": "done"})
+    return spec
+
+
+def test_the_review_cannot_be_approved_while_a_shot_does_not_show_the_subject(batch, tmp_path, monkeypatch):
+    from studio.actions import approval_argv
+
+    spec = _rendered_with_bad_footage(batch, tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="does not show"):
+        approval_argv(batch, "review_queue")
+    spec["videos"][0]["footage_override"] = True
+    save_spec(batch, spec)
+    assert approval_argv(batch, "review_queue")[-2:] == ["--approve", "review_queue"]
+
+
+def test_the_review_can_be_approved_when_every_shot_passes(batch, tmp_path, monkeypatch):
+    from studio.actions import approval_argv
+
+    _rendered_with_bad_footage(batch, tmp_path, monkeypatch, verdicts=("yes", "partly", "yes", "yes"))
+    assert approval_argv(batch, "review_queue")[-1] == "review_queue"
+
+
+def test_export_refuses_footage_that_was_not_verified(batch, tmp_path, monkeypatch):
+    _rendered_with_bad_footage(batch, tmp_path, monkeypatch)
+    cli = FakeCliRecorder()
+    with pytest.raises(ValueError, match="does not show"):
+        plan_for("export", batch, ScriptedAi({}), {}, cli)(_ctx(tmp_path))
+    assert cli.calls == []
+
+
+def test_footage_with_no_check_at_all_cannot_be_exported_either(batch, tmp_path):
+    spec = load_spec(batch)
+    spec["sources"] = {"s": {"path": "a.webm", "clip_id": "c", "provider": "wikimedia", "license": "x", "url": "https://x", "mode": "fill"}}
+    spec["videos"][0]["cuts"] = [{"source": "s", "in": 0, "dur": 3}]
+    save_spec(batch, spec)
+    cli = FakeCliRecorder()
+    with pytest.raises(ValueError, match="not been checked"):
+        plan_for("export", batch, ScriptedAi({}), {}, cli)(_ctx(tmp_path))

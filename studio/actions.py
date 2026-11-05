@@ -213,9 +213,13 @@ def _review(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
 
 def _export(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Callable[[JobContext], None]:
     def body(ctx: JobContext) -> None:
-        ids = [v["id"] for v in load_spec(project).get("videos") or [] if not v.get("redo_note")]
+        spec = load_spec(project)
+        ids = [v["id"] for v in spec.get("videos") or [] if not v.get("redo_note")]
         if not ids:
             raise ValueError("no videos to export")
+        blockers = render_blockers(project, spec, ids)
+        if blockers:
+            raise ValueError("; ".join(blockers))
         _check(cli.run(ctx, ["export", str(project), "--approved", ",".join(ids)])[0], "export")
     return body
 
@@ -250,6 +254,10 @@ def approval_argv(project_dir: Path, gate: str) -> list[str]:
     states = step_states(project)
     if states["render"] != "done" or gate_status(project, "review_queue") == "none":
         raise ValueError("prepare the review first: every video must be rendered and the review step run")
+    spec = load_spec(project)
+    blockers = render_blockers(project, spec, [v["id"] for v in spec.get("videos") or [] if v.get("cuts")])
+    if blockers:  # a video that is already rendered can still carry footage that does not show its subject
+        raise ValueError("; ".join(blockers))
     return base + ["--approve", "review_queue"]
 
 

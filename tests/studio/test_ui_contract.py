@@ -130,3 +130,8 @@ def test_footage_step_shows_the_evidence_for_every_shot():
                    "illustrative", "Not checked yet", "verify_only"):
         assert needle in js, needle
     assert "innerHTML" not in js
+
+
+def test_approve_batch_is_held_back_by_footage_problems():
+    js = _read("studio.js")
+    assert "footage_blockers" in js
