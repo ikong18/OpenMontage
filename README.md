@@ -166,6 +166,14 @@ python scripts/backlot_simulate_run.py  # no production yet? watch a simulated o
 
 And when a run is done, hit **▶ REPLAY RUN** — the whole production replays from its timestamps, scrubbable end to end. See [`backlot/README.md`](backlot/README.md) for how it works.
 
+### Studio - run the shorts factory from the browser
+
+```bash
+python -m studio open        # create a batch, pick topics, review videos, export - on 127.0.0.1 only
+```
+
+Studio drives the `shorts-factory` batch flow with your own `claude` CLI (no API keys) and keeps the two owner approvals as buttons. See [`studio/README.md`](studio/README.md).
+
 ---
 
 ## Quick Start
