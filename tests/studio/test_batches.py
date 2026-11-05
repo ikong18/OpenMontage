@@ -104,3 +104,36 @@ def test_editing_topic_source_refreshes_seed_claim_but_not_real_claims(tmp_path)
     scripted = {**v, "narration": "Words.", "claims": [{"text": "real", "sources": ["https://c.example/3"]}]}
     edit_videos(tmp_path / bid, [scripted], "idea")
     assert load_spec(tmp_path / bid)["videos"][0]["claims"][0]["text"] == "real"
+
+
+# ---- list status and titles ------------------------------------------------------
+
+
+def test_list_batches_reports_progress_and_nice_title(tmp_path):
+    from studio.batches import list_batches
+
+    bid = create_batch(tmp_path, "Space facts 04", "youtube_shorts")
+    row = list_batches(tmp_path)[0]
+    assert row["id"] == bid and row["title"] == "Space facts 04"
+    assert row["current_step"] == "topics" and row["steps_done"] == 0 and row["steps_total"] == 6
+
+
+def test_list_batches_prettifies_generated_titles(tmp_path):
+    from studio.batches import list_batches
+
+    folder = tmp_path / "shorts-space-batch-02"
+    folder.mkdir()
+    (folder / "project.json").write_text(json.dumps(
+        {"pipeline_type": "shorts-factory", "title": "Shorts batch shorts-space-batch-02"}), encoding="utf-8")
+    assert list_batches(tmp_path)[0]["title"] == "Space Batch 02"
+
+
+def test_list_batches_newest_activity_first(tmp_path):
+    import os
+    from studio.batches import list_batches
+
+    a = create_batch(tmp_path, "Older", "youtube_shorts")
+    b = create_batch(tmp_path, "Newer", "youtube_shorts")
+    os.utime(tmp_path / a / "project.json", (1000, 1000))
+    os.utime(tmp_path / a / "artifacts" / "batch_spec.json", (1000, 1000))
+    assert [r["id"] for r in list_batches(tmp_path)] == [b, a]

@@ -10,6 +10,7 @@ from typing import Any
 
 from lib.shorts.platforms import PLATFORM_NAMES
 from lib.shorts.spec import load_spec, save_spec, validate_spec
+from studio.steps import STEPS, step_states
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 PIPELINE = "shorts-factory"
@@ -37,6 +38,14 @@ def batch_dir(projects_dir: Path, batch_id: str) -> Path:
     return folder
 
 
+def _display_title(title: Any, folder_name: str) -> str:
+    text = str(title or "").strip()
+    if text and not text.lower().startswith("shorts batch "):
+        return text
+    plain = re.sub(r"^shorts[-_]", "", folder_name).replace("-", " ").replace("_", " ")
+    return plain.title() or folder_name
+
+
 def list_batches(projects_dir: Path) -> list[dict[str, Any]]:
     rows: list[tuple[float, dict[str, Any]]] = []
     root = Path(projects_dir)
@@ -50,13 +59,20 @@ def list_batches(projects_dir: Path) -> list[dict[str, Any]]:
             spec = load_spec(folder)
         except (FileNotFoundError, ValueError):
             spec = {}
+        states = step_states(folder)
+        current = next((s for s in STEPS if states[s] != "done"), "done")
+        activity = max((p.stat().st_mtime for p in (folder / "project.json", folder / "artifacts" / "batch_spec.json")
+                        if p.exists()), default=0.0)
         rows.append((
-            (folder / "project.json").stat().st_mtime,
+            activity,
             {
                 "id": folder.name,
-                "title": meta.get("title") or folder.name,
+                "title": _display_title(meta.get("title"), folder.name),
                 "platform": spec.get("platform") or "youtube_shorts",
                 "video_count": len(spec.get("videos") or []),
+                "current_step": current,
+                "steps_done": sum(1 for s in STEPS if states[s] == "done"),
+                "steps_total": len(STEPS),
             },
         ))
     return [row for _, row in sorted(rows, key=lambda item: item[0], reverse=True)]

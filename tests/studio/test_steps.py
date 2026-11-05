@@ -148,3 +148,45 @@ def test_failed_flag_does_not_override_a_step_that_is_actually_done(tmp_path):
     _gate(project, "idea")
     states = step_states(project, failed="footage")
     assert states["footage"] == "done" and states["render"] == "ready"
+
+
+# ---- next_action ---------------------------------------------------------------
+
+from studio.steps import next_action  # noqa: E402
+
+
+def _states(**over):
+    base = {s: "locked" for s in STEPS}
+    base.update(over)
+    return base
+
+
+GATES_NONE = {"idea": "none", "review_queue": "none"}
+
+
+def test_next_action_new_batch_asks_for_topics():
+    n = next_action(_states(topics="ready"), GATES_NONE, None, 0, "b")
+    assert n["kind"] == "todo" and n["step"] == "topics" and "suggest topics" in n["text"].lower()
+
+
+def test_next_action_topics_present_asks_to_approve():
+    n = next_action(_states(topics="ready"), GATES_NONE, None, 3, "b")
+    assert n["step"] == "topics" and "approve" in n["text"].lower()
+
+
+def test_next_action_running_failed_stale_and_done():
+    assert next_action(_states(topics="done", script="running"), GATES_NONE, {"step": "script"}, 3, "b")["kind"] == "running"
+    f = next_action(_states(topics="done", script="failed"), GATES_NONE, None, 3, "b")
+    assert f["kind"] == "failed" and f["step"] == "script"
+    s = next_action(_states(topics="done", script="done", footage="done", render="stale"), GATES_NONE, None, 3, "b")
+    assert s["step"] == "render" and "again" in s["text"].lower()
+    done = {k: "done" for k in STEPS}
+    d = next_action(done, {"idea": "approved", "review_queue": "approved"}, None, 3, "b")
+    assert d["kind"] == "done" and "export" in d["text"]
+
+
+def test_next_action_review_waits_for_prepare_then_approval():
+    base = _states(topics="done", script="done", footage="done", render="done", review="ready")
+    assert "prepare" in next_action(base, GATES_NONE, None, 3, "b")["text"].lower()
+    n = next_action(base, {"idea": "approved", "review_queue": "awaiting"}, None, 3, "b")
+    assert n["step"] == "review" and "approve the batch" in n["text"].lower()

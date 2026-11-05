@@ -133,3 +133,42 @@ def step_states(project_dir: Path, running: str | None = None, failed: str | Non
             states[step] = "ready"
         previous_done = states[step] == "done"
     return states
+
+
+STEP_LABELS = {"topics": "Topics", "script": "Script", "footage": "Footage",
+               "render": "Voice and render", "review": "Review", "export": "Export"}
+
+
+def next_action(states: dict[str, str], gates: dict[str, str], running: dict | None, video_count: int,
+                batch_id: str) -> dict[str, str]:
+    """One plain-language line telling the owner what to do next. kind: running | failed | todo | done."""
+    if running:
+        step = running.get("step") or "topics"
+        return {"kind": "running", "step": step,
+                "text": f"{STEP_LABELS.get(step, step)} is running - you can leave this page."}
+    for step in STEPS:
+        if states.get(step) == "failed":
+            return {"kind": "failed", "step": step,
+                    "text": f"{STEP_LABELS[step]} failed. Open it to read the log and retry."}
+    step = next((s for s in STEPS if states.get(s) != "done"), None)
+    if step is None:
+        return {"kind": "done", "step": "export",
+                "text": f"All done. Your files are in projects/{batch_id}/export/ - upload them by hand."}
+    if step == "topics":
+        text = ("Next: ask Claude to suggest topics." if video_count == 0
+                else "Next: check the topics, then approve them.")
+    elif step == "script":
+        text = "Next: have Claude write the scripts, or write them yourself."
+    elif step == "footage":
+        text = "Next: find footage for each video."
+    elif step == "render":
+        text = ("Something changed after the last render. Make the videos again." if states.get("render") == "stale"
+                else "Next: make the videos.")
+    elif step == "review":
+        review = gates.get("review_queue", "none")
+        text = {"none": "Next: prepare the review.",
+                "awaiting": "Next: watch the videos, then approve the batch."}.get(
+                    review, "Next: prepare the review again, then approve the batch.")
+    else:
+        text = "Next: export the approved videos (private)."
+    return {"kind": "todo", "step": step, "text": text}

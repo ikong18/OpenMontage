@@ -14,12 +14,14 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from lib.shorts.platforms import get_platform
 from lib.shorts.spec import STAGES, load_spec
 from studio.actions import AI_STEPS, REPO, approval_argv, plan_for, redo_video
 from studio.ai import AiClient
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
-from studio.steps import STEPS, gate_status, step_states
+from studio.sources import source_info
+from studio.steps import STEPS, gate_status, next_action, step_states
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 SSE_HEARTBEAT_SECONDS = 15
@@ -73,12 +75,18 @@ def create_app(
             spec = load_spec(project)
         except (OSError, ValueError):
             spec = {"videos": [], "sources": {}}
+        steps = step_states(project, running=(running or {}).get("step"), failed=failed)
+        gates = {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")}
+        platform = get_platform(spec.get("platform"))
         return {
             "id": batch_id,
             "platform": spec.get("platform") or "youtube_shorts",
             "spec": spec,
-            "steps": step_states(project, running=(running or {}).get("step"), failed=failed),
-            "gates": {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")},
+            "steps": steps,
+            "gates": gates,
+            "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id),
+            "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
+            "source_info": source_info(project, spec),
             "jobs": recent,
             "running": running,
             "renders": {str(v.get("id")): (project / "renders" / f"{v.get('id')}.mp4").is_file()

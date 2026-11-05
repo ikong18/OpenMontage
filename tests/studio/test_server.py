@@ -157,3 +157,14 @@ def test_batch_view_lists_renders_and_exports(env):
     (project / "export" / "01-v1").mkdir(parents=True)
     data = env.client.get(f"/api/batches/{bid}").json()
     assert data["renders"] == {"v1": True} and data["exports"] == ["01-v1"] and data["renders_stamp"] > 0
+
+
+def test_batch_view_has_next_action_limits_and_source_info(env, monkeypatch):
+    import studio.server as srv
+
+    monkeypatch.setattr(srv, "source_info", lambda project, spec: {"s": {"duration": 60.0, "sheet_step": 4, "width": 1, "height": 1}})
+    bid = create_batch(env.projects, "Next", "facebook_reels")
+    data = env.client.get(f"/api/batches/{bid}").json()
+    assert data["next"]["step"] == "topics" and data["next"]["kind"] == "todo"
+    assert data["limits"]["max_description"] == 2000 and data["limits"]["max_hashtags"] == 30
+    assert data["source_info"]["s"]["duration"] == 60.0
