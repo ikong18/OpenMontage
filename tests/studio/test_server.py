@@ -1,0 +1,145 @@
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from starlette.testclient import TestClient
+
+from lib.shorts.spec import load_spec
+from studio.batches import create_batch
+from studio.jobs import JobRunner
+from studio.server import create_app
+
+TOKEN = "test-token"
+H = {"X-Studio-Token": TOKEN}
+
+
+@pytest.fixture
+def env(tmp_path):
+    jobs = JobRunner(tmp_path)
+    app = create_app(tmp_path, jobs=jobs, token=TOKEN)
+    client = TestClient(app, base_url="http://127.0.0.1:4760")
+    return SimpleEnv(tmp_path, jobs, client)
+
+
+class SimpleEnv:
+    def __init__(self, projects, jobs, client):
+        self.projects, self.jobs, self.client = projects, jobs, client
+
+
+def _idea_video(**extra):
+    base = {"id": "v1", "topic": "t", "hook_type": "question", "hook_text": "h?",
+            "claims": [{"text": "c", "sources": ["https://example.com/a"]}]}
+    base.update(extra)
+    return base
+
+
+def test_health_and_foreign_host_is_400(env):
+    assert env.client.get("/api/health").json()["ok"] is True
+    bad = TestClient(env.client.app, base_url="http://evil.example.com")
+    assert bad.get("/api/health").status_code == 400
+
+
+def test_post_without_token_is_403_and_with_token_201(env):
+    body = {"name": "Server Test", "platform": "facebook_reels"}
+    assert env.client.post("/api/batches", json=body).status_code == 403
+    assert env.client.post("/api/batches", json=body, headers={"X-Studio-Token": "wrong"}).status_code == 403
+    resp = env.client.post("/api/batches", json=body, headers=H)
+    assert resp.status_code == 201 and resp.json()["id"].startswith("shorts-")
+
+
+def test_create_with_bad_platform_is_422(env):
+    resp = env.client.post("/api/batches", json={"name": "x", "platform": "tiktok"}, headers=H)
+    assert resp.status_code == 422 and "platform" in resp.json()["detail"]
+
+
+def test_create_then_get_batch_shows_topics_ready(env):
+    bid = env.client.post("/api/batches", json={"name": "Shows", "platform": "youtube_shorts"}, headers=H).json()["id"]
+    data = env.client.get(f"/api/batches/{bid}").json()
+    assert data["steps"]["topics"] == "ready" and data["steps"]["script"] == "locked"
+    assert data["gates"] == {"idea": "none", "review_queue": "none"}
+    assert data["platform"] == "youtube_shorts" and data["spec"]["videos"] == []
+    assert [b["id"] for b in env.client.get("/api/batches").json()] == [bid]
+
+
+def test_get_unknown_or_unsafe_batch_404(env):
+    assert env.client.get("/api/batches/nope").status_code == 404
+    assert env.client.get("/api/batches/..%2f..%2fetc").status_code == 404
+
+
+def test_put_spec_saves_valid_and_requires_token(env):
+    bid = create_batch(env.projects, "Put", "youtube_shorts")
+    url = f"/api/batches/{bid}/spec?stage=idea"
+    assert env.client.put(url, json={"videos": [_idea_video()]}).status_code == 403
+    assert env.client.put(url, json={"videos": [_idea_video()]}, headers=H).status_code == 200
+    assert load_spec(env.projects / bid)["videos"][0]["topic"] == "t"
+
+
+def test_put_spec_invalid_returns_422_and_file_unchanged(env):
+    bid = create_batch(env.projects, "Put", "youtube_shorts")
+    path = env.projects / bid / "artifacts" / "batch_spec.json"
+    before = path.read_bytes()
+    resp = env.client.put(f"/api/batches/{bid}/spec?stage=idea",
+                          json={"videos": [_idea_video(hook_type="bogus")]}, headers=H)
+    assert resp.status_code == 422 and resp.json()["violations"]
+    assert path.read_bytes() == before
+
+
+def test_put_spec_bad_stage_is_422(env):
+    bid = create_batch(env.projects, "Put", "youtube_shorts")
+    resp = env.client.put(f"/api/batches/{bid}/spec?stage=nope", json={"videos": []}, headers=H)
+    assert resp.status_code == 422
+
+
+def test_put_spec_while_job_running_is_409(env):
+    bid = create_batch(env.projects, "Busy", "youtube_shorts")
+    env.jobs.start(bid, "render", [sys.executable, "-c", "import time; time.sleep(2)"])
+    resp = env.client.put(f"/api/batches/{bid}/spec?stage=idea", json={"videos": [_idea_video()]}, headers=H)
+    assert resp.status_code == 409
+    env.jobs.wait(bid)
+
+
+def test_media_serves_files_and_blocks_traversal(env):
+    bid = create_batch(env.projects, "Media", "youtube_shorts")
+    other = create_batch(env.projects, "Other", "youtube_shorts")
+    (env.projects / bid / "renders").mkdir()
+    (env.projects / bid / "renders" / "v1.mp4").write_bytes(b"0123456789")
+    (env.projects / other / "secret.txt").write_text("nope", encoding="utf-8")
+    assert env.client.get(f"/media/{bid}/renders/v1.mp4").content == b"0123456789"
+    for bad in (f"/media/{bid}/..%2f{other}%2fsecret.txt", f"/media/{bid}/%2e%2e/{other}/secret.txt", f"/media/{bid}//etc/passwd",
+                f"/media/{bid}/C:/Windows/win.ini", f"/media/{bid}/renders", "/media/nope/x"):
+        assert env.client.get(bad).status_code == 404, bad
+
+
+def test_media_range_request_returns_206(env):
+    bid = create_batch(env.projects, "Range", "youtube_shorts")
+    (env.projects / bid / "renders").mkdir()
+    (env.projects / bid / "renders" / "v1.mp4").write_bytes(b"0123456789")
+    resp = env.client.get(f"/media/{bid}/renders/v1.mp4", headers={"Range": "bytes=2-5"})
+    assert resp.status_code == 206 and resp.content == b"2345"
+
+
+def test_pages_embed_token(env):
+    bid = create_batch(env.projects, "Pages", "youtube_shorts")
+    for url in ("/", f"/batch/{bid}"):
+        resp = env.client.get(url)
+        assert resp.status_code == 200 and TOKEN in resp.text and "__STUDIO_TOKEN__" not in resp.text
+    assert env.client.get("/batch/nope").status_code == 404
+
+
+def test_job_log_tail_and_failed_step_reported(env):
+    bid = create_batch(env.projects, "Log", "youtube_shorts")
+    job = env.jobs.start(bid, "topics", [sys.executable, "-c", "import sys; print('boom line'); sys.exit(1)"])
+    env.jobs.wait(bid)
+    log = env.client.get(f"/api/batches/{bid}/jobs/{job}/log?lines=5").json()["log"]
+    assert "boom line" in log
+    assert env.client.get(f"/api/batches/{bid}/jobs/../../x/log").status_code == 404
+    data = env.client.get(f"/api/batches/{bid}").json()
+    assert data["steps"]["topics"] == "failed" and data["jobs"][0]["id"] == job
+
+
+def test_events_stream_says_hello(env):
+    bid = create_batch(env.projects, "Events", "youtube_shorts")
+    with env.client.stream("GET", f"/api/batches/{bid}/events") as resp:
+        first = next(resp.iter_lines())
+    assert resp.status_code == 200 and json.loads(first.removeprefix("data: "))["type"] == "hello"

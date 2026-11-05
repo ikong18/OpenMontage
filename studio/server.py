@@ -1,0 +1,182 @@
+"""Studio's local web server. Reads derive from files; writes need the per-run token."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import secrets
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from lib.shorts.spec import STAGES, load_spec
+from studio.ai import AiClient
+from studio.batches import batch_dir, create_batch, edit_videos, list_batches
+from studio.jobs import JobBusy, JobRunner
+from studio.steps import STEPS, gate_status, step_states
+
+UI_DIR = Path(__file__).resolve().parent / "ui"
+SSE_HEARTBEAT_SECONDS = 15
+
+
+def _sse(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def create_app(
+    projects_dir: Path,
+    jobs: Optional[JobRunner] = None,
+    ai: Optional[AiClient] = None,
+    token: Optional[str] = None,
+) -> FastAPI:
+    projects_dir = Path(projects_dir)
+    jobs = jobs or JobRunner(projects_dir)
+    token = token or secrets.token_urlsafe(24)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        jobs.recover_all()
+        yield
+
+    app = FastAPI(title="Studio", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+    app.state.projects_dir, app.state.jobs, app.state.ai, app.state.token = projects_dir, jobs, ai, token
+
+    def require_token(x_studio_token: Optional[str] = Header(default=None)) -> None:
+        if not x_studio_token or not secrets.compare_digest(x_studio_token, token):
+            raise HTTPException(status_code=403, detail="missing or wrong Studio token")
+
+    def project_or_404(batch_id: str) -> Path:
+        try:
+            return batch_dir(projects_dir, batch_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="no such batch") from None
+
+    def page(name: str) -> HTMLResponse:
+        html = (UI_DIR / name).read_text(encoding="utf-8").replace("__STUDIO_TOKEN__", token)
+        return HTMLResponse(html)
+
+    def batch_view(batch_id: str) -> dict[str, Any]:
+        project = project_or_404(batch_id)
+        running = jobs.running(batch_id)
+        recent = jobs.recent(batch_id)
+        failed = None
+        if not running and recent and recent[0].get("status") == "failed" and recent[0].get("step") in STEPS:
+            failed = recent[0]["step"]
+        try:
+            spec = load_spec(project)
+        except (OSError, ValueError):
+            spec = {"videos": [], "sources": {}}
+        return {
+            "id": batch_id,
+            "platform": spec.get("platform") or "youtube_shorts",
+            "spec": spec,
+            "steps": step_states(project, running=(running or {}).get("step"), failed=failed),
+            "gates": {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")},
+            "jobs": recent,
+            "running": running,
+        }
+
+    app.state.batch_view = batch_view
+    app.state.project_or_404 = project_or_404
+    app.state.require_token = require_token
+
+    # ---- pages ---------------------------------------------------------
+    @app.get("/")
+    async def index() -> HTMLResponse:
+        return page("index.html")
+
+    @app.get("/batch/{batch_id}")
+    async def batch_page(batch_id: str) -> HTMLResponse:
+        project_or_404(batch_id)
+        return page("batch.html")
+
+    app.mount("/ui", StaticFiles(directory=str(UI_DIR)), name="ui")
+
+    # ---- api -----------------------------------------------------------
+    @app.get("/api/health")
+    async def health() -> dict:
+        return {"ok": True, "app": "studio"}
+
+    @app.get("/api/batches")
+    async def batches() -> list:
+        return await asyncio.to_thread(list_batches, projects_dir)
+
+    @app.post("/api/batches", status_code=201, dependencies=[Depends(require_token)])
+    async def new_batch(body: dict) -> dict:
+        try:
+            batch_id = create_batch(projects_dir, str(body.get("name") or ""), str(body.get("platform") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"id": batch_id}
+
+    @app.get("/api/batches/{batch_id}")
+    async def get_batch(batch_id: str) -> dict:
+        return await asyncio.to_thread(batch_view, batch_id)
+
+    @app.put("/api/batches/{batch_id}/spec", dependencies=[Depends(require_token)])
+    async def put_spec(batch_id: str, body: dict, stage: str = "idea") -> dict:
+        project = project_or_404(batch_id)
+        if stage not in STAGES:
+            raise HTTPException(status_code=422, detail=f"stage must be one of {', '.join(STAGES)}")
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        videos = body.get("videos")
+        if not isinstance(videos, list):
+            raise HTTPException(status_code=422, detail="body needs a 'videos' list")
+        violations = await asyncio.to_thread(edit_videos, project, videos, stage)
+        if violations:
+            return JSONResponse(status_code=422, content={"violations": violations})
+        return {"ok": True}
+
+    @app.get("/api/batches/{batch_id}/jobs/{job_id}/log")
+    async def job_log(batch_id: str, job_id: str, lines: int = 40) -> dict:
+        project_or_404(batch_id)
+        try:
+            return {"log": jobs.tail(batch_id, job_id, max(1, min(lines, 400)))}
+        except (FileNotFoundError, OSError):
+            raise HTTPException(status_code=404, detail="no such job") from None
+
+    @app.get("/api/batches/{batch_id}/events")
+    async def events(batch_id: str, request: Request) -> StreamingResponse:
+        project_or_404(batch_id)
+
+        async def stream():
+            queue = jobs.subscribe()
+            try:
+                yield _sse({"type": "hello", "batch_id": batch_id})
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                    except asyncio.TimeoutError:
+                        yield _sse({"type": "heartbeat"})
+                        continue
+                    if event.get("batch_id") == batch_id:
+                        yield _sse({"type": "change", **event})
+            finally:
+                jobs.unsubscribe(queue)
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/media/{batch_id}/{path:path}")
+    async def media(batch_id: str, path: str):
+        project = project_or_404(batch_id)
+        try:
+            target = (project / path).resolve()
+            inside = target.is_relative_to(project.resolve())
+        except (OSError, ValueError):
+            raise HTTPException(status_code=404) from None
+        if not path or Path(path).is_absolute() or not inside or not target.is_file():
+            raise HTTPException(status_code=404)
+        return FileResponse(target)
+
+    return app
+
