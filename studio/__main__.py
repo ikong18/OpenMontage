@@ -10,6 +10,7 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -82,26 +83,48 @@ def cmd_open(batch_id: str | None) -> int:
     return 0
 
 
-def cmd_serve(port: int) -> int:
+def _open_when_ready(port: int, timeout: float = 30.0) -> bool:
+    """Open the browser once the server answers (never before), so the page is not 'refused to connect'."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _server_alive(port):
+            try:
+                webbrowser.open(f"http://127.0.0.1:{port}/")
+            except Exception:
+                pass
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def cmd_serve(port: int, open_browser: bool = False) -> int:
     import uvicorn
 
     print(f"studio: http://127.0.0.1:{port}/  (Ctrl+C to stop)")
+    if open_browser:
+        threading.Thread(target=_open_when_ready, args=(port,), daemon=True).start()
     uvicorn.run(build_app(), host="127.0.0.1", port=port, log_level="warning")
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="studio", description=__doc__)
     sub = parser.add_subparsers(dest="command")
     p_open = sub.add_parser("open", help="open Studio in the browser (starts the server if needed)")
     p_open.add_argument("batch_id", nargs="?", default=None)
     p_serve = sub.add_parser("serve", help="run the Studio server in the foreground")
     p_serve.add_argument("--port", type=int, default=_port())
+    p_serve.add_argument("--open", action="store_true", help="open the browser once the server is ready")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "open":
         return cmd_open(args.batch_id)
     if args.command == "serve":
-        return cmd_serve(args.port)
+        return cmd_serve(args.port, args.open)
     parser.print_help()
     return 2
 

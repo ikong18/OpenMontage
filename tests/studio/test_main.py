@@ -57,3 +57,27 @@ def test_readme_states_the_safety_rules():
 def test_index_and_main_readme_mention_studio():
     assert "studio" in (REPO / "skills" / "INDEX.md").read_text(encoding="utf-8").lower()
     assert "python -m studio" in (REPO / "README.md").read_text(encoding="utf-8")
+
+
+def test_open_when_ready_waits_for_the_server_then_opens_once(monkeypatch):
+    alive = iter([False, False, True])
+    opened = []
+    monkeypatch.setattr(cli, "_server_alive", lambda port: next(alive))
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    assert cli._open_when_ready(4760, timeout=5) is True
+    assert opened == ["http://127.0.0.1:4760/"]
+
+
+def test_open_when_ready_gives_up_without_opening(monkeypatch):
+    opened = []
+    monkeypatch.setattr(cli, "_server_alive", lambda port: False)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    clock = iter([0, 1, 2, 99, 100])
+    monkeypatch.setattr(cli.time, "time", lambda: next(clock))
+    assert cli._open_when_ready(4760, timeout=5) is False and opened == []
+
+
+def test_serve_parser_accepts_open_flag():
+    assert cli.build_parser().parse_args(["serve", "--open"]).open is True

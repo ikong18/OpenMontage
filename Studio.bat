@@ -9,6 +9,5 @@ if not exist ".venv\Scripts\python.exe" (
 )
 set "PATH=%CD%\.venv\Scripts;%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.2-full_build\bin;%PATH%"
 echo Studio is starting. Leave this window open; close it to stop Studio.
-start "" "http://127.0.0.1:4760/"
-".venv\Scripts\python.exe" -m studio serve
+".venv\Scripts\python.exe" -m studio serve --open
 pause
