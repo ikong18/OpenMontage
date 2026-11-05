@@ -1,0 +1,81 @@
+"""Turn AI answers into spec changes. Each function returns a new spec and raises ValueError with
+the validator's messages if the result would not validate; the input spec is never touched."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+from lib.shorts.spec import validate_spec
+
+
+def _check(spec: dict[str, Any], project_dir: Path, stage: str) -> dict[str, Any]:
+    violations = validate_spec(spec, project_dir, stage)
+    if violations:
+        raise ValueError("; ".join(violations))
+    return spec
+
+
+def apply_topics(spec: dict[str, Any], items: list[dict[str, Any]], count: int, project_dir: Path) -> dict[str, Any]:
+    if len(items) != count:
+        raise ValueError(f"expected {count} topics but the AI returned {len(items)}")
+    out = copy.deepcopy(spec)
+    out["videos"] = []
+    for index, item in enumerate(items, start=1):
+        sources = [str(s) for s in item.get("sources") or []]
+        out["videos"].append({
+            "id": f"v{index}",
+            "topic": item.get("topic"),
+            "hook_type": item.get("hook_type"),
+            "hook_text": item.get("hook_text"),
+            "topic_sources": sources,
+            # seed claim: the script step replaces it with the real claims
+            "claims": [{"text": item.get("topic"), "sources": sources}],
+        })
+    return _check(out, project_dir, "idea")
+
+
+def apply_scripts(spec: dict[str, Any], items: list[dict[str, Any]], project_dir: Path) -> dict[str, Any]:
+    out = copy.deepcopy(spec)
+    by_id = {v.get("id"): v for v in out.get("videos") or []}
+    seen: set[str] = set()
+    for item in items:
+        vid = item.get("id")
+        if vid not in by_id:
+            raise ValueError(f"the AI returned a script for unknown video id '{vid}'")
+        seen.add(vid)
+        for field in ("narration", "claims", "title", "description", "tags"):
+            if field in item:
+                by_id[vid][field] = item[field]
+    missing = [vid for vid in by_id if vid not in seen]
+    if missing:
+        raise ValueError(f"no script returned for {', '.join(missing)}")
+    return _check(out, project_dir, "script")
+
+
+def apply_cuts(spec: dict[str, Any], items: list[dict[str, Any]], project_dir: Path) -> dict[str, Any]:
+    out = copy.deepcopy(spec)
+    by_id = {v.get("id"): v for v in out.get("videos") or []}
+    for item in items:
+        vid = item.get("id")
+        if vid not in by_id:
+            raise ValueError(f"the AI returned cuts for unknown video id '{vid}'")
+        by_id[vid]["cuts"] = [
+            {"source": c.get("source"), "in": c.get("in"), "dur": c.get("dur")} for c in item.get("cuts") or []
+        ]
+    return _check(out, project_dir, "visuals")
+
+
+def add_source(spec: dict[str, Any], key: str, entry: dict[str, Any], width: int = 0, height: int = 0) -> dict[str, Any]:
+    out = copy.deepcopy(spec)
+    sources = out.setdefault("sources", {})
+    previous = sources.get(key) or {}
+    if previous.get("mode"):
+        mode = previous["mode"]
+    elif width and height and width / height < 1.4:
+        mode = "blurpad"
+    else:
+        mode = "fill"
+    sources[key] = {**entry, "mode": mode}
+    return out
