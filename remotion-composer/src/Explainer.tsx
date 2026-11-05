@@ -304,6 +304,15 @@ export interface ExplainerProps {
   cuts: Cut[];
   overlays?: Overlay[];
   captions?: WordCaption[];
+  /** Optional caption look. Omitted fields keep the long-standing defaults. */
+  captionStyle?: {
+    fontSize?: number;
+    wordsPerPage?: number;
+    bottomOffset?: number;
+    color?: string;
+    highlightColor?: string;
+    backgroundColor?: string;
+  };
   audio?: AudioConfig;
 }
 
@@ -832,7 +841,7 @@ const OverlayRenderer: React.FC<{ overlay: Overlay; theme: ThemeConfig }> = ({
 // ---------------------------------------------------------------------------
 
 export const Explainer: React.FC<ExplainerProps> = (props) => {
-  const { cuts, overlays, captions, audio } = props;
+  const { cuts, overlays, captions, audio, captionStyle } = props;
   const { fps, durationInFrames } = useVideoConfig();
 
   // Resolve theme from props — playbook name, theme name, or custom themeConfig
@@ -873,11 +882,12 @@ export const Explainer: React.FC<ExplainerProps> = (props) => {
       {captions && captions.length > 0 && (
         <CaptionOverlay
           words={captions}
-          wordsPerPage={6}
-          fontSize={42}
-          color={theme.textColor}
-          highlightColor={theme.captionHighlightColor}
-          backgroundColor={theme.captionBackgroundColor}
+          wordsPerPage={captionStyle?.wordsPerPage ?? 6}
+          fontSize={captionStyle?.fontSize ?? 42}
+          bottomOffset={captionStyle?.bottomOffset ?? 80}
+          color={captionStyle?.color ?? theme.textColor}
+          highlightColor={captionStyle?.highlightColor ?? theme.captionHighlightColor}
+          backgroundColor={captionStyle?.backgroundColor ?? theme.captionBackgroundColor}
         />
       )}
 
