@@ -17,15 +17,34 @@ class SizeCapError(RuntimeError):
     """The file is larger than the cap, or its size cannot be determined."""
 
 
+USER_AGENT = "OpenMontageShorts/1.0 (personal, non-commercial use; https://github.com/ikong18/OpenMontage)"
+
+
 def _head_size(url: str) -> Optional[int]:
+    """File size in bytes, or None when it cannot be learned. Some hosts (Wikimedia) refuse requests without a descriptive
+    User-Agent, refuse HEAD, or omit the length: so ask HEAD first, then for just the first byte of the file."""
+    import re
+
     import requests  # lazy: tests inject `head` instead
 
+    headers = {"User-Agent": USER_AGENT}
     try:
-        response = requests.head(url, allow_redirects=True, timeout=15)
-        if response.status_code >= 400:
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=15)
+        if response.status_code < 400:
+            length = response.headers.get("content-length")
+            if length:
+                return int(length)
+        probe = requests.get(url, headers={**headers, "Range": "bytes=0-0"}, stream=True, allow_redirects=True, timeout=15)
+        try:
+            if probe.status_code == 206:
+                match = re.search(r"/(\d+)\s*$", probe.headers.get("content-range", ""))
+                return int(match.group(1)) if match else None
+            if probe.status_code == 200:  # the server ignored the range: the header still carries the whole size
+                length = probe.headers.get("content-length")
+                return int(length) if length else None
             return None  # an error page's length says nothing about the real file
-        length = response.headers.get("content-length")
-        return int(length) if length else None
+        finally:
+            probe.close()
     except Exception:
         return None
 
