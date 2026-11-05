@@ -134,3 +134,10 @@ def test_validate_accepts_non_ascii_topic(tmp_path):
     spec = _spec(tmp_path)
     spec["videos"][0]["topic"] = "Pokémon 日本"
     assert validate_spec(copy.deepcopy(spec), tmp_path) == []
+
+
+def test_save_spec_roundtrips_non_ascii(tmp_path):
+    from lib.shorts.spec import save_spec
+
+    save_spec(tmp_path, {"videos": [], "note": "Pokémon 日本"})
+    assert load_spec(tmp_path)["note"] == "Pokémon 日本"

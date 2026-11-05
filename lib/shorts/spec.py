@@ -30,6 +30,12 @@ def load_spec(project_dir: Path) -> dict[str, Any]:
     return data
 
 
+def save_spec(project_dir: Path, spec: dict[str, Any]) -> None:
+    path = Path(project_dir) / SPEC_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(spec, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
