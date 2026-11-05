@@ -56,13 +56,23 @@ def build_props(
     }
 
 
-def render_video(registry: Any, props: dict[str, Any], output_path: Path) -> None:
-    result = registry._tools["video_compose"].execute({
-        "operation": "remotion_render",
-        "edit_decisions": props,
-        "output_path": str(output_path),
-        "profile": "youtube_shorts",
-    })
-    if not result.success:
-        first = (result.error or "render failed").strip().splitlines()[0]
-        raise RuntimeError(f"render failed: {first}")
+def render_video(registry: Any, props: dict[str, Any], output_path: Path, attempts: int = 2, retry_wait: float = 3.0) -> None:
+    """Render one video. A render can fail for reasons that pass (a browser crash, a busy port), so try again once."""
+    import time
+
+    last = ""
+    for attempt in range(1, attempts + 1):
+        result = registry._tools["video_compose"].execute({
+            "operation": "remotion_render",
+            "edit_decisions": props,
+            "output_path": str(output_path),
+            "profile": "youtube_shorts",
+        })
+        if result.success:
+            return
+        lines = [ln.strip() for ln in (result.error or "render failed").strip().splitlines() if ln.strip()]
+        # the first line only names the tool; the cause is at the end, so keep the last few lines (still on one line)
+        last = lines[0] if len(lines) == 1 else f"{lines[0]} ... " + " | ".join(lines[-6:])
+        if attempt < attempts:
+            time.sleep(retry_wait)
+    raise RuntimeError(f"render failed after {attempts} attempts: {last[:700]}")

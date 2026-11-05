@@ -77,3 +77,39 @@ def test_build_props_applies_a_caption_style_override():
 def test_build_props_override_does_not_mutate_the_default():
     build_props([Path("a.mp4")], [3.0], [], Path("n.wav"), caption_style={"bottomOffset": 999})
     assert CAPTION_STYLE["bottomOffset"] == 380
+
+
+def test_render_failure_keeps_the_useful_tail_of_the_error_on_one_line(tmp_path):
+    class Tool:
+        def execute(self, inputs):
+            noise = "\n".join(f"line {i}" for i in range(30))
+            return type("R", (), {"success": False, "error": f"Remotion render failed (exit 1):\n{noise}\nError: Could not find composition\n  at frame 3\n"})()
+
+    with pytest.raises(RuntimeError) as exc:
+        render_video(_FakeRegistry(Tool()), {"cuts": []}, tmp_path / "v1.mp4")
+    message = str(exc.value)
+    assert "\n" not in message
+    assert "Could not find composition" in message and "at frame 3" in message
+    assert "line 0" not in message and len(message) < 900
+
+
+def test_a_render_that_fails_once_is_retried_and_then_succeeds(tmp_path):
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, inputs):
+            self.calls += 1
+            ok = self.calls >= 2
+            return type("R", (), {"success": ok, "error": None if ok else "Remotion render failed (exit 1):\nChrome crashed"})()
+
+    tool = Flaky()
+    render_video(_FakeRegistry(tool), {"cuts": []}, tmp_path / "v1.mp4", retry_wait=0)
+    assert tool.calls == 2
+
+
+def test_a_render_that_keeps_failing_reports_every_attempt(tmp_path):
+    tool = _FakeTool(ok=False)
+    with pytest.raises(RuntimeError, match="2 attempts"):
+        render_video(_FakeRegistry(tool), {"cuts": []}, tmp_path / "v1.mp4", retry_wait=0)
+    assert len(tool.calls) == 2
