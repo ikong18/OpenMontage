@@ -117,6 +117,18 @@ def check_zero_cost(entries: list[dict], allow_empty: bool = False) -> dict[str,
     return _result(violations)
 
 
+def check_video_costs(videos: list[dict]) -> dict[str, Any]:
+    """Every video must log its own cost entries (a pooled batch-wide list can hide one)."""
+    if not videos:
+        return _result(["empty batch"])
+    violations = [
+        f"{video.get('id', '?')}: no cost_entries recorded"
+        for video in videos
+        if not video.get("cost_entries")
+    ]
+    return _result(violations)
+
+
 def check_license_log(videos: list[dict]) -> dict[str, Any]:
     if not videos:
         return _result(["empty batch"])
@@ -164,6 +176,7 @@ def run_all(batch: dict, probes: dict[str, dict], cost_entries: list[dict]) -> d
         "footage_reuse": check_footage_reuse(videos),
         "short_specs": check_short_specs(probes),
         "zero_cost": check_zero_cost(cost_entries),
+        "video_costs": check_video_costs(videos),
         "license_log": check_license_log(videos),
         "fact_sources": check_fact_sources(videos),
     }

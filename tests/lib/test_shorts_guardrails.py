@@ -18,6 +18,7 @@ def _video(i, hook_type="question", hook_text=None, clip_id=None):
         "hook_type": hook_type,
         "hook_text": hook_text or f"hook {i}",
         "claims": [{"text": "x", "sources": ["https://example.com/a"]}],
+        "cost_entries": [{"tool": "piper_tts", "provider": "piper", "cost_usd": 0.0}],
         "clips": [
             {
                 "clip_id": clip_id or f"clip{i}",
@@ -188,3 +189,31 @@ def test_footage_reuse_reports_missing_clip_id():
     result = check_footage_reuse([video, _video(2)])
     assert result["ok"] is False
     assert any("missing clip_id" in v for v in result["violations"])
+
+
+# --- batch runner: per-video cost rule ---
+
+from lib.shorts_guardrails import check_video_costs  # noqa: E402
+
+
+def test_check_video_costs_flags_video_without_entries():
+    video = _video(1)
+    video["cost_entries"] = []
+    result = check_video_costs([video, _video(2)])
+    assert result["ok"] is False
+    assert any("v1" in v for v in result["violations"])
+
+
+def test_check_video_costs_rejects_empty_batch_and_accepts_logged_videos():
+    assert check_video_costs([])["ok"] is False
+    assert check_video_costs([_video(1), _video(2)])["ok"] is True
+
+
+def test_run_all_includes_video_costs():
+    video = _video(1)
+    video["cost_entries"] = []
+    batch = {"videos": [video, _video(2, "myth_bust")]}
+    probes = {i: {"width": 1080, "height": 1920, "duration": 30.0} for i in ("v1", "v2")}
+    pooled = [{"tool": "piper_tts", "provider": "piper", "cost_usd": 0.0}]
+    result = run_all(batch, probes, pooled)
+    assert any(v.startswith("video_costs:") for v in result["violations"])
