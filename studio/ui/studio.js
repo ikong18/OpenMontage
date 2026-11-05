@@ -43,6 +43,7 @@ async function api(method, url, body) {
 }
 
 const $ = (id) => document.getElementById(id);
+const isHttp = (s) => /^https?:\/\//i.test(String(s));
 
 /* ------------------------------------------------------------------ home */
 
@@ -159,7 +160,7 @@ function initBatch() {
         h("label", {}, "Tags (comma separated)", h("input", { value: (v.tags || []).join(", "),
           oninput: edit(v, "tags", (s) => s.split(",").map((t) => t.trim()).filter(Boolean)) })),
         h("div", { class: "muted" }, "Claims: ", (v.claims || []).map((c) =>
-          h("div", {}, c.text, " - ", (c.sources || []).map((s) => h("a", { href: s, target: "_blank", rel: "noopener" }, s)))))));
+          h("div", {}, c.text, " - ", (c.sources || []).map((s) => (isHttp(s) ? h("a", { href: s, target: "_blank", rel: "noopener" }, s) : h("span", {}, s))))))));
     });
     out.push(actionButton("Save edits", () => saveVideos("script"), canRun("script") && draft.length > 0 && dirty));
     return out;

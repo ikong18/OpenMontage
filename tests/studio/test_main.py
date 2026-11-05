@@ -33,11 +33,19 @@ def test_open_starts_server_when_not_running(monkeypatch):
     assert cli.main(["open"]) == 0 and calls["spawned"] == 1
 
 
-def test_build_app_uses_claude_cli_outside_the_repo_root(tmp_path):
-    app = cli.build_app(tmp_path)
+def test_build_app_uses_claude_cli_with_given_work_dir(tmp_path):
+    app = cli.build_app(tmp_path, work_dir=tmp_path / "w")
     assert isinstance(app.state.ai, ClaudeCli)
-    assert app.state.ai.work_dir == tmp_path / ".studio-work"
+    assert app.state.ai.work_dir == tmp_path / "w"
     assert app.state.projects_dir == tmp_path
+
+
+def test_default_work_dir_is_outside_the_repo_tree(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    work = cli.default_work_dir()
+    assert not work.resolve().is_relative_to(REPO.resolve())
+    monkeypatch.delenv("LOCALAPPDATA")
+    assert not cli.default_work_dir().resolve().is_relative_to(REPO.resolve())
 
 
 def test_readme_states_the_safety_rules():

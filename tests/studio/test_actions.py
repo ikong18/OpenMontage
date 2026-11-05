@@ -192,16 +192,18 @@ def test_footage_rejects_cuts_shorter_than_narration(batch):
         _run_footage(batch, [("nasa_ok", "50.0")], cuts_dur=2.5, per_video=2)
     spec = load_spec(batch)
     assert not any(v.get("cuts") for v in spec["videos"])
-    assert before  # spec still loads and has no cuts applied
+    assert (batch / "artifacts" / "batch_spec.json").exists() and before
 
 
 # ---- render, review, export -------------------------------------------------
 
 
-def test_render_runs_voice_then_render(batch):
+def test_render_runs_voice_then_render_for_each_stale_video(batch):
+    _ready_for_footage(batch)
     cli = FakeCli(batch)
     plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
-    assert [c[0] for c in cli.calls] == ["voice", "render"]
+    assert cli.calls == [["voice", str(batch), "--video", "v1"], ["render", str(batch), "--video", "v1"],
+                         ["voice", str(batch), "--video", "v2"], ["render", str(batch), "--video", "v2"]]
 
 
 def test_review_prepare_runs_checkpoints_without_approve(batch):
@@ -339,3 +341,98 @@ def test_redo_route_unknown_video_404_and_busy_409(api):
     assert api.client.post(f"/api/batches/{bid}/videos/v1/redo", json={"note": "x"}, headers=H).status_code == 409
     api.jobs.wait(bid)
     assert api.client.post(f"/api/batches/{bid}/videos/v1/redo", json={"note": "x"}, headers=H).status_code == 200
+
+
+# ---- review fixes -------------------------------------------------------------
+
+
+def _after_footage(batch):
+    _ready_for_footage(batch)
+    _run_footage(batch, [("nasa_ok", "50.0")])
+
+
+def _second_footage_run(batch, cuts_by_video, candidates=(("nasa_ok", "50.0"), ("nasa_two", "40.0"))):
+    ai = FakeAi({"footage_queries": {"items": [{"id": "v2", "queries": [{"source": "nasa", "query": "sun"}]}]},
+                 "footage_cuts": {"items": cuts_by_video}})
+    cli = FakeCli(batch, _footage_handler(list(candidates)))
+    plan_for("footage", batch, ai, {}, cli)(_ctx(batch))
+    return ai, cli
+
+
+def _good_cuts(vid, key):
+    return {"id": vid, "cuts": [{"source": key, "in": k * 4, "dur": 3.4} for k in range(4)]}
+
+
+def test_footage_only_changes_videos_that_needed_cuts(batch):
+    _after_footage(batch)
+    v1_before = load_spec(batch)["videos"][0]["cuts"]
+    redo_video(batch, "v2", "boring")
+    bad_v1 = {"id": "v1", "cuts": [{"source": "nasa_two", "in": 0, "dur": 3.0}]}
+    _second_footage_run(batch, [bad_v1, _good_cuts("v2", "nasa_two")])
+    spec = load_spec(batch)
+    assert spec["videos"][0]["cuts"] == v1_before
+    assert spec["videos"][1]["cuts"][0]["source"] == "nasa_two"
+
+
+def test_footage_fails_if_ai_skips_a_needed_video(batch):
+    _after_footage(batch)
+    redo_video(batch, "v2", "boring")
+    with pytest.raises(ValueError, match="v2"):
+        _second_footage_run(batch, [_good_cuts("v1", "nasa_two")])
+
+
+def test_footage_rejects_cut_past_the_end_of_the_clip(batch):
+    _after_footage(batch)
+    redo_video(batch, "v2", "boring")
+    past = {"id": "v2", "cuts": [{"source": "nasa_two", "in": 78.0, "dur": 3.4}] + _good_cuts("v2", "nasa_two")["cuts"]}
+    with pytest.raises(ValueError, match="past the end"):
+        _second_footage_run(batch, [past])
+
+
+def test_redo_avoids_old_clip_tells_ai_the_note_and_clears_it_afterwards(batch):
+    _after_footage(batch)
+    redo_video(batch, "v2", "the shots are dull")
+    assert load_spec(batch)["videos"][1]["redo_avoid"]
+    ai, cli = _second_footage_run(batch, [_good_cuts("v2", "nasa_two")])
+    fetched = [a[a.index("--clip-id") + 1] for a in cli.calls if a[0] == "fetch"]
+    assert fetched == ["nasa_two"]
+    queries_in = next(c for c in ai.calls if c["task"] == "footage_queries")["inputs"]["videos"][0]
+    assert queries_in["redo_note"] == "the shots are dull"
+    v2 = load_spec(batch)["videos"][1]
+    assert "redo_note" not in v2 and "redo_avoid" not in v2
+
+
+def test_redone_video_is_exported_again(batch):
+    _after_footage(batch)
+    redo_video(batch, "v2", "boring")
+    _second_footage_run(batch, [_good_cuts("v2", "nasa_two")])
+    cli = FakeCli(batch)
+    plan_for("export", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    assert cli.calls == [["export", str(batch), "--approved", "v1,v2"]]
+
+
+def test_footage_voices_only_the_videos_that_need_cuts(batch):
+    _after_footage(batch)
+    redo_video(batch, "v2", "boring")
+    _, cli = _second_footage_run(batch, [_good_cuts("v2", "nasa_two")])
+    voices = [c for c in cli.calls if c[0] == "voice"]
+    assert voices == [["voice", str(batch), "--video", "v2"]]
+
+
+def test_render_only_touches_stale_videos_and_nothing_when_all_current(batch):
+    from lib.shorts.batch import render_fingerprint
+
+    _after_footage(batch)
+    spec = load_spec(batch)
+    (batch / "renders").mkdir(exist_ok=True)
+    for v in spec["videos"]:
+        (batch / "renders" / f"{v['id']}.mp4").write_bytes(b"r")
+    write_batch(batch, {"videos": [{"id": "v1", "render_hash": render_fingerprint(spec, spec["videos"][0])},
+                                   {"id": "v2", "render_hash": "old"}]})
+    cli = FakeCli(batch)
+    plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    assert cli.calls == [["voice", str(batch), "--video", "v2"], ["render", str(batch), "--video", "v2"]]
+    write_batch(batch, {"videos": [{"id": v["id"], "render_hash": render_fingerprint(spec, v)} for v in spec["videos"]]})
+    cli = FakeCli(batch)
+    plan_for("render", batch, FakeAi({}), {}, cli)(_ctx(batch))
+    assert cli.calls == []

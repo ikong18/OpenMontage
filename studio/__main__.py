@@ -47,13 +47,18 @@ def _spawn_server(port: int) -> None:
     subprocess.Popen(cmd, **kwargs)
 
 
-def build_app(projects_dir: Path = PROJECTS_DIR):
+def default_work_dir() -> Path:
+    """Where claude runs. Outside the repo tree: Claude Code also reads CLAUDE.md files in parent folders."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
+    return Path(base) / "OpenMontage" / "studio-work"
+
+
+def build_app(projects_dir: Path = PROJECTS_DIR, work_dir: Path | None = None):
     from studio.ai import ClaudeCli
     from studio.server import create_app
 
     projects_dir = Path(projects_dir)
-    # claude runs in a folder of its own: the repo root's CLAUDE.md would redirect it to the production guide
-    return create_app(projects_dir, ai=ClaudeCli(projects_dir / ".studio-work"))
+    return create_app(projects_dir, ai=ClaudeCli(Path(work_dir) if work_dir else default_work_dir()))
 
 
 def cmd_open(batch_id: str | None) -> int:

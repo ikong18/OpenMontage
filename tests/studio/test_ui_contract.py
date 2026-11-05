@@ -44,3 +44,8 @@ def test_js_calls_every_api_route_the_server_has():
     js = _read("studio.js")
     for needle in ("/api/batches", "/steps/", "/gates/", "/redo", "/spec?stage=", "/events", "/media/"):
         assert needle in js, needle
+
+
+def test_links_are_only_made_for_http_sources():
+    js = _read("studio.js")
+    assert "https?:" in js and "isHttp" in js

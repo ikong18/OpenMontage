@@ -83,3 +83,24 @@ def test_edit_videos_drops_unknown_keys(tmp_path):
     edit_videos(tmp_path / bid, [_video(evil="x", path="../../x")], "idea")
     saved = load_spec(tmp_path / bid)["videos"][0]
     assert "evil" not in saved and "path" not in saved
+
+
+def test_added_topic_without_claims_saves_with_seed_claim(tmp_path):
+    bid = create_batch(tmp_path, "Add", "youtube_shorts")
+    new = {"id": "v1", "topic": "Fresh", "hook_type": "question", "hook_text": "h?",
+           "topic_sources": ["https://example.com/a"]}
+    assert edit_videos(tmp_path / bid, [new], "idea") == []
+    saved = load_spec(tmp_path / bid)["videos"][0]
+    assert saved["claims"] == [{"text": "Fresh", "sources": ["https://example.com/a"]}]
+
+
+def test_editing_topic_source_refreshes_seed_claim_but_not_real_claims(tmp_path):
+    bid = create_batch(tmp_path, "Seed", "youtube_shorts")
+    v = {"id": "v1", "topic": "T", "hook_type": "question", "hook_text": "h?", "topic_sources": ["https://a.example/1"]}
+    edit_videos(tmp_path / bid, [v], "idea")
+    v["topic_sources"] = ["https://b.example/2"]
+    edit_videos(tmp_path / bid, [v], "idea")
+    assert load_spec(tmp_path / bid)["videos"][0]["claims"][0]["sources"] == ["https://b.example/2"]
+    scripted = {**v, "narration": "Words.", "claims": [{"text": "real", "sources": ["https://c.example/3"]}]}
+    edit_videos(tmp_path / bid, [scripted], "idea")
+    assert load_spec(tmp_path / bid)["videos"][0]["claims"][0]["text"] == "real"

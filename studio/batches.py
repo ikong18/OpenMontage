@@ -15,7 +15,7 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 PIPELINE = "shorts-factory"
 EDITABLE_FIELDS = (
     "topic", "hook_type", "hook_text", "narration", "claims", "cuts",
-    "title", "description", "tags", "redo_note", "topic_sources",
+    "title", "description", "tags", "redo_note", "redo_avoid", "topic_sources",
 )
 
 
@@ -109,6 +109,9 @@ def edit_videos(project_dir: Path, videos: list[dict[str, Any]], stage: str) -> 
         for field in EDITABLE_FIELDS:
             if field in video:
                 item[field] = video[field]
+        if stage == "idea" and not item.get("narration") and item.get("topic_sources"):
+            # before the script exists the only claim is the topic itself, sourced from topic_sources
+            item["claims"] = [{"text": item.get("topic"), "sources": [str(s) for s in item.get("topic_sources") or []]}]
         cleaned.append(item)
     spec["videos"] = cleaned
     violations = validate_spec(spec, project_dir, stage)

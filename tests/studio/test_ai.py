@@ -118,3 +118,9 @@ def test_nested_session_error_gets_a_plain_hint(monkeypatch, tmp_path):
               stderr="Error: Claude Code cannot be launched inside another Claude Code session.")
     with pytest.raises(AiError, match="normal terminal"):
         ClaudeCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+
+
+def test_strict_mcp_config_so_user_mcp_servers_are_not_offered(monkeypatch, tmp_path):
+    seen = _fake_run(monkeypatch, stdout=_ok({"items": []}))
+    ClaudeCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    assert "--strict-mcp-config" in seen["argv"]

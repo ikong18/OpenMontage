@@ -10,6 +10,12 @@ from typing import Any
 from lib.shorts.spec import validate_spec
 
 
+def _http_only(sources: Any, where: str) -> None:
+    for source in sources or []:
+        if not str(source).lower().startswith(("http://", "https://")):
+            raise ValueError(f"{where}: source '{str(source)[:60]}' is not an http(s) link")
+
+
 def _check(spec: dict[str, Any], project_dir: Path, stage: str) -> dict[str, Any]:
     violations = validate_spec(spec, project_dir, stage)
     if violations:
@@ -24,6 +30,7 @@ def apply_topics(spec: dict[str, Any], items: list[dict[str, Any]], count: int, 
     out["videos"] = []
     for index, item in enumerate(items, start=1):
         sources = [str(s) for s in item.get("sources") or []]
+        _http_only(sources, f"topic {index}")
         out["videos"].append({
             "id": f"v{index}",
             "topic": item.get("topic"),
@@ -45,6 +52,8 @@ def apply_scripts(spec: dict[str, Any], items: list[dict[str, Any]], project_dir
         if vid not in by_id:
             raise ValueError(f"the AI returned a script for unknown video id '{vid}'")
         seen.add(vid)
+        for claim in item.get("claims") or []:
+            _http_only((claim or {}).get("sources"), f"{vid} claim")
         for field in ("narration", "claims", "title", "description", "tags"):
             if field in item:
                 by_id[vid][field] = item[field]

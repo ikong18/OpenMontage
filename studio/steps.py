@@ -121,7 +121,7 @@ def step_states(project_dir: Path, running: str | None = None, failed: str | Non
 
         if step == running:
             states[step] = "running"
-        elif step == failed:
+        elif step == failed and not done:
             states[step] = "failed"
         elif not previous_done:
             states[step] = "locked"

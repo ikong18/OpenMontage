@@ -141,3 +141,10 @@ def test_unreadable_files_never_raise(tmp_path):
     (project / "checkpoint_idea.json").write_text("garbage", encoding="utf-8")
     states = step_states(project)
     assert states["topics"] == "ready"
+
+
+def test_failed_flag_does_not_override_a_step_that_is_actually_done(tmp_path):
+    project = _batch(tmp_path)
+    _gate(project, "idea")
+    states = step_states(project, failed="footage")
+    assert states["footage"] == "done" and states["render"] == "ready"

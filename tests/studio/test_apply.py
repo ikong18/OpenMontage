@@ -122,3 +122,20 @@ def test_input_spec_never_mutated(batch):
     add_source(spec, "x", {"path": "p", "clip_id": "c", "provider": "n", "license": "l", "url": "u"}, 1, 1)
     assert spec == before
     save_spec(batch, spec)
+
+
+# ---- review fixes: only http(s) sources ----------------------------------------
+
+
+def test_apply_scripts_rejects_any_non_http_source(batch):
+    spec = apply_topics(load_spec(batch), _topics(1), 1, batch)
+    bad = _script("v1", claims=[{"text": "c", "sources": [SRC, "javascript:alert(1)"]}])
+    with pytest.raises(ValueError, match="javascript"):
+        apply_scripts(spec, [bad], batch)
+
+
+def test_apply_topics_rejects_any_non_http_source(batch):
+    bad = _topics(1)
+    bad[0]["sources"] = [SRC, "file:///etc/passwd"]
+    with pytest.raises(ValueError, match="file:"):
+        apply_topics(load_spec(batch), bad, 1, batch)

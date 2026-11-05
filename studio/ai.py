@@ -87,7 +87,7 @@ class ClaudeCli:
         # cwd must not be the repo root: its CLAUDE.md would redirect the run to the production guide.
         self.work_dir.mkdir(parents=True, exist_ok=True)
         argv = [self.binary, "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
-                "--no-session-persistence", "--tools", ",".join(tools)]
+                "--no-session-persistence", "--strict-mcp-config", "--tools", ",".join(tools)]
         if tools:
             argv += ["--allowedTools", ",".join(tools)]
         for directory in add_dirs or []:
