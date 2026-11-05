@@ -40,3 +40,29 @@ def test_record_cost_replaces_same_tool():
     record_cost(batch, "v1", "subtitle_gen", "openmontage", 0.0)
     entries = batch["videos"][0]["cost_entries"]
     assert [e["tool"] for e in entries] == ["piper_tts", "subtitle_gen"]
+
+
+# --- review fixes: fingerprints detect stale voice / render results ---
+
+from lib.shorts.batch import render_fingerprint, voice_fingerprint  # noqa: E402
+
+
+def test_voice_fingerprint_changes_with_narration_and_voice_settings():
+    spec = _spec()
+    base = voice_fingerprint(spec, spec["videos"][0])
+    assert base == voice_fingerprint(spec, spec["videos"][0])
+    spec["videos"][0]["narration"] = "Different words."
+    assert voice_fingerprint(spec, spec["videos"][0]) != base
+    spec2 = _spec()
+    spec2["voice"] = {"model": "other", "length_scale": 1.0}
+    assert voice_fingerprint(spec2, spec2["videos"][0]) != base
+
+
+def test_render_fingerprint_changes_with_cuts_and_sources():
+    spec = _spec()
+    base = render_fingerprint(spec, spec["videos"][0])
+    spec["videos"][0]["cuts"][0]["dur"] = 5.0
+    assert render_fingerprint(spec, spec["videos"][0]) != base
+    spec2 = _spec()
+    spec2["sources"]["a"]["mode"] = "blurpad"
+    assert render_fingerprint(spec2, spec2["videos"][0]) != base

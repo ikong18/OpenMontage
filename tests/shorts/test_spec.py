@@ -13,7 +13,7 @@ def _spec(project_dir):
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b"x")
     return {
-        "project_id": "p1",
+        "project_id": project_dir.name,
         "sources": {
             "a": {"path": "assets/video/a.mp4", "clip_id": "nasa_a", "provider": "nasa",
                   "mode": "fill", "license": "public domain", "url": "https://example.com/a"},
@@ -141,3 +141,74 @@ def test_save_spec_roundtrips_non_ascii(tmp_path):
 
     save_spec(tmp_path, {"videos": [], "note": "Pokémon 日本"})
     assert load_spec(tmp_path)["note"] == "Pokémon 日本"
+
+
+# --- review fixes ---
+
+
+def test_validate_flags_project_id_folder_mismatch(tmp_path):
+    spec = _spec(tmp_path)
+    spec["project_id"] = "other"
+    assert any("project_id" in v for v in validate_spec(spec, tmp_path))
+
+
+@pytest.mark.parametrize("bad_id", ["../../evil", "a/b", "a b", "", "火星"])
+def test_validate_rejects_unsafe_video_ids(tmp_path, bad_id):
+    spec = _spec(tmp_path)
+    spec["videos"][0]["id"] = bad_id
+    assert any("id" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_rejects_source_path_outside_project(tmp_path):
+    spec = _spec(tmp_path)
+    outside = tmp_path.parent / "outside.mp4"
+    outside.write_bytes(b"x")
+    spec["sources"]["a"]["path"] = "../outside.mp4"
+    assert any("outside" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_flags_same_clip_reused_under_two_source_keys(tmp_path):
+    spec = _spec(tmp_path)
+    spec["sources"]["b"] = dict(spec["sources"]["a"])  # same file and clip_id under a new key
+    spec["videos"][0]["cuts"][0] = {"source": "a", "in": 1.0, "dur": 5.0}
+    spec["videos"][1]["cuts"][0] = {"source": "b", "in": 2.0, "dur": 5.0}
+    assert any("overlap" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_flags_source_without_clip_id(tmp_path):
+    spec = _spec(tmp_path)
+    del spec["sources"]["a"]["clip_id"]
+    assert any("clip_id" in v for v in validate_spec(spec, tmp_path))
+
+
+def test_validate_malformed_shapes_report_instead_of_raising(tmp_path):
+    spec = _spec(tmp_path)
+    spec["videos"][0]["cuts"][0]["source"] = ["a"]
+    spec["sources"]["c"] = "path.mp4"
+    violations = validate_spec(spec, tmp_path)
+    assert violations and all(isinstance(v, str) for v in violations)
+
+
+def test_validate_stage_idea_needs_only_idea_fields(tmp_path):
+    spec = {"project_id": tmp_path.name, "videos": [{
+        "id": "v1", "topic": "t", "hook_type": "question", "hook_text": "h",
+        "claims": [{"text": "c", "sources": ["https://e.com"]}]}]}
+    assert validate_spec(spec, tmp_path, stage="idea") == []
+    assert validate_spec(spec, tmp_path, stage="full") != []
+
+
+def test_validate_stage_script_requires_narration_and_visuals_requires_cuts(tmp_path):
+    spec = _spec(tmp_path)
+    for video in spec["videos"]:
+        for field in ("narration", "cuts", "title", "description", "tags"):
+            video.pop(field)
+    assert any("narration" in v for v in validate_spec(spec, tmp_path, stage="script"))
+    for video in spec["videos"]:
+        video["narration"] = "One."
+    assert validate_spec(spec, tmp_path, stage="script") == []
+    assert any("cuts" in v for v in validate_spec(spec, tmp_path, stage="visuals"))
+
+
+def test_validate_unknown_stage_raises_value_error(tmp_path):
+    with pytest.raises(ValueError):
+        validate_spec(_spec(tmp_path), tmp_path, stage="nope")

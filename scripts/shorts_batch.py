@@ -23,16 +23,18 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.shorts.align import SilenceAligner, detect_speech_spans, split_sentences, to_remotion_captions  # noqa: E402
-from lib.shorts.batch import derive_batch, read_batch, record_cost, write_batch  # noqa: E402
+from lib.shorts.batch import (  # noqa: E402
+    derive_batch, read_batch, record_cost, render_fingerprint, voice_fingerprint, write_batch,
+)
 from lib.shorts.checkpoints import write_idea_record, write_stage_records  # noqa: E402
 from lib.shorts.export import export_videos  # noqa: E402
 from lib.shorts.fetch import DEFAULT_MAX_MB, fetch_clip  # noqa: E402
 from lib.shorts.props import build_props, check_cut_coverage, render_video  # noqa: E402
 from lib.shorts.segments import cut_segment  # noqa: E402
-from lib.shorts.spec import load_spec, save_spec, validate_spec  # noqa: E402
+from lib.shorts.spec import STAGES, load_spec, save_spec, validate_spec  # noqa: E402
 from scripts.shorts_audit import audit_project  # noqa: E402
 
-_PRESERVED = ("audio", "captions", "audio_duration", "cost_entries")
+_PRESERVED = ("audio", "captions", "audio_duration", "cost_entries", "voice_hash", "render_hash")
 
 
 def _registry() -> Any:
@@ -67,18 +69,37 @@ def _load(project_dir: str) -> tuple[Path, Path, dict[str, Any]]:
 
 
 def _load_batch(project: Path, spec: dict[str, Any]) -> dict[str, Any]:
-    """Fresh batch from the spec (so clip ids follow the cuts), keeping per-video run results."""
+    """Fresh batch from the spec (so clip ids follow the cuts).
+
+    Per-video run results (audio, captions, costs, render hash) are kept only while the narration and voice
+    settings still match the audio that was made; otherwise they are stale and dropped.
+    """
     batch = derive_batch(spec)
     try:
         existing = {v["id"]: v for v in read_batch(project)["videos"]}
     except FileNotFoundError:
         existing = {}
-    for video in batch["videos"]:
+    for video, source in zip(batch["videos"], spec["videos"]):
         old = existing.get(video["id"], {})
+        if old.get("voice_hash") != voice_fingerprint(spec, source):
+            continue
         for key in _PRESERVED:
             if key in old:
                 video[key] = old[key]
     return batch
+
+
+def _check_current(batch: dict[str, Any], spec: dict[str, Any], ids: list[str] | None = None) -> None:
+    """Refuse to record or export videos whose voice or render no longer matches the spec."""
+    by_id = {v["id"]: v for v in batch["videos"]}
+    for video in spec["videos"]:
+        if ids is not None and video["id"] not in ids:
+            continue
+        entry = by_id[video["id"]]
+        if not entry.get("audio_duration"):
+            raise ValueError(f"{video['id']}: no narration yet (or it changed); run `voice` first")
+        if entry.get("render_hash") != render_fingerprint(spec, video):
+            raise ValueError(f"{video['id']}: render is out of date; run `render` again")
 
 
 def _selected(spec: dict[str, Any], only: str | None) -> list[dict[str, Any]]:
@@ -93,11 +114,11 @@ def _selected(spec: dict[str, Any], only: str | None) -> list[dict[str, Any]]:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     project, _, spec = _load(args.project_dir)
-    violations = validate_spec(spec, project)
+    violations = validate_spec(spec, project, stage=args.stage)
     for violation in violations:
         print(violation)
     if not violations:
-        print(f"spec OK: {len(spec['videos'])} video(s)")
+        print(f"spec OK ({args.stage}): {len(spec['videos'])} video(s)")
     return 1 if violations else 0
 
 
@@ -120,6 +141,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 def cmd_voice(args: argparse.Namespace) -> int:
     project, _, spec = _load(args.project_dir)
+    violations = validate_spec(spec, project, stage="script")
+    if violations:
+        for violation in violations:
+            print(violation)
+        return 1
     registry = _registry()
     tts, subs = registry._tools["piper_tts"], registry._tools["subtitle_gen"]
     if tts.get_status().value != "available":
@@ -156,6 +182,8 @@ def cmd_voice(args: argparse.Namespace) -> int:
         entry["audio"] = f"assets/audio/{video['id']}.wav"
         entry["captions"] = f"assets/audio/{video['id']}.captions.json"
         entry["audio_duration"] = round(duration, 2)
+        entry["voice_hash"] = voice_fingerprint(spec, video)
+        entry.pop("render_hash", None)  # the old render used the old audio
         record_cost(batch, video["id"], "piper_tts", "piper", 0.0)
         record_cost(batch, video["id"], "subtitle_gen", "openmontage", 0.0)
         write_batch(project, batch)
@@ -197,6 +225,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         registry = registry or _registry()
         render_video(registry, props, project / entry["render"])
         record_cost(batch, video["id"], "video_compose", "remotion", 0.0)
+        entry["render_hash"] = render_fingerprint(spec, video)
         write_batch(project, batch)
         print(f"rendered {video['id']} -> {project / entry['render']}")
     return 0
@@ -208,17 +237,25 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
     if args.idea_only:
         if "review_queue" in approve:
             raise ValueError("--approve review_queue belongs to the full checkpoints run, not --idea-only")
+        violations = validate_spec(spec, project, stage="idea")
+        if violations:
+            for violation in violations:
+                print(violation)
+            return 1
         write_idea_record(projects_dir, spec, approve="idea" in approve)
         print("idea record written (" + ("approved" if "idea" in approve else "awaiting approval") + ")")
         return 0
     if "idea" in approve:
         raise ValueError("approve the idea gate with --idea-only --approve idea")
+    batch = _load_batch(project, spec)
+    _check_current(batch, spec)
+    write_batch(project, batch)  # the audit reads this file, so it must match what is recorded
     audit = audit_project(project)
     if not audit["ok"]:
         for violation in audit["violations"]:
             print(violation)
         return 1
-    written = write_stage_records(projects_dir, spec, _load_batch(project, spec), approve=approve)
+    written = write_stage_records(projects_dir, spec, batch, approve=approve)
     print("stage records written: " + ", ".join(written))
     return 0
 
@@ -231,6 +268,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             print(violation)
         return 1
     ids = [i.strip() for i in args.approved.split(",") if i.strip()]
+    _check_current(_load_batch(project, spec), spec, ids)
     entries = export_videos(projects_dir, spec, ids, _registry())
     print(f"exported {len(entries)} video(s) as private; nothing was uploaded")
     return 0
@@ -249,7 +287,9 @@ def _parser() -> argparse.ArgumentParser:
         p.set_defaults(func=func)
         return p
 
-    add("validate", cmd_validate, "check the batch spec")
+    p = add("validate", cmd_validate, "check the batch spec")
+    p.add_argument("--stage", choices=STAGES, default="full",
+                   help="check only the fields needed up to this stage (default: everything)")
     p = add("fetch", cmd_fetch, "download one named clip (size-capped)")
     p.add_argument("--source", required=True)
     p.add_argument("--query", required=True)
@@ -269,11 +309,24 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_output() -> None:
+    """Windows pipes stdout as cp1252; a non-ASCII topic must not turn a message into a crash."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     args = _parser().parse_args(argv)
     try:
         return args.func(args)
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:  # SizeCapError is a RuntimeError
+    except KeyError as exc:  # a spec field the validator does not cover yet
+        print(f"error: spec is missing {exc}")
+        return 1
+    except (OSError, ValueError, RuntimeError) as exc:  # includes network errors and SizeCapError
         print(f"error: {_first_line(str(exc))}")
         return 1
 

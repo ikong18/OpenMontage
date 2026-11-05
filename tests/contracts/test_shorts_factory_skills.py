@@ -126,3 +126,10 @@ def test_approve_flag_is_tied_to_owner_approval():
 
 def test_index_lists_the_batch_runner():
     assert "shorts_batch.py" in (SKILLS / "INDEX.md").read_text(encoding="utf-8")
+
+
+def test_early_directors_validate_only_their_stage():
+    """A full validate needs title/cuts/etc. that later stages fill in, so it would always fail early."""
+    assert "validate projects/<id> --stage idea" in _read("idea-director")
+    assert "validate projects/<id> --stage script" in _read("script-director")
+    assert "validate projects/<id> --stage visuals" in _read("visuals-director")

@@ -22,6 +22,8 @@ def _head_size(url: str) -> Optional[int]:
 
     try:
         response = requests.head(url, allow_redirects=True, timeout=15)
+        if response.status_code >= 400:
+            return None  # an error page's length says nothing about the real file
         length = response.headers.get("content-length")
         return int(length) if length else None
     except Exception:

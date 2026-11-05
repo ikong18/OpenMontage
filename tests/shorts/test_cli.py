@@ -1,17 +1,22 @@
 """scripts/shorts_batch.py: exit codes, one-line errors, gate flags (no network, no rendering)."""
 
 import json
+import os
 import shutil
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from lib.shorts.batch import derive_batch, write_batch
+from lib.shorts.batch import derive_batch, read_batch, render_fingerprint, voice_fingerprint, write_batch
 from lib.shorts.fetch import SizeCapError
-from lib.shorts.spec import save_spec
+from lib.shorts.spec import load_spec, save_spec
 from scripts import shorts_batch
 
 PID = "p1"
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _spec():
@@ -29,6 +34,17 @@ def _spec():
     }
 
 
+def _voiced_batch(spec, duration=10.0, rendered=True):
+    batch = derive_batch(spec)
+    for video, sv in zip(batch["videos"], spec["videos"]):
+        video.update({"audio": f"assets/audio/{video['id']}.wav",
+                      "captions": f"assets/audio/{video['id']}.captions.json",
+                      "audio_duration": duration, "voice_hash": voice_fingerprint(spec, sv)})
+        if rendered:
+            video["render_hash"] = render_fingerprint(spec, sv)
+    return batch
+
+
 @pytest.fixture
 def project(tmp_path):
     project_dir = tmp_path / "projects" / PID
@@ -36,10 +52,7 @@ def project(tmp_path):
     (project_dir / "assets" / "video" / "a.mp4").write_bytes(b"x")
     spec = _spec()
     save_spec(project_dir, spec)
-    batch = derive_batch(spec)
-    batch["videos"][0].update({"audio": "assets/audio/v1.wav", "captions": "assets/audio/v1.captions.json",
-                               "audio_duration": 10.0})
-    write_batch(project_dir, batch)
+    write_batch(project_dir, _voiced_batch(spec))
     return project_dir
 
 
@@ -48,14 +61,41 @@ def _run(capsys, *argv):
     return code, capsys.readouterr().out
 
 
+def _edit_batch(project, **fields):
+    batch = read_batch(project)
+    batch["videos"][0].update(fields)
+    write_batch(project, batch)
+
+
+def _edit_spec(project, fn):
+    spec = load_spec(project)
+    fn(spec)
+    save_spec(project, spec)
+
+
+def _one_line(out):
+    return len([ln for ln in out.splitlines() if ln.strip()]) == 1
+
+
 def test_validate_exit_codes(project, capsys):
     code, out = _run(capsys, "validate", str(project))
     assert code == 0 and "OK" in out
-    spec = _spec()
-    spec["videos"][0]["hook_type"] = "clickbait"
-    save_spec(project, spec)
+    _edit_spec(project, lambda s: s["videos"][0].update(hook_type="clickbait"))
     code, out = _run(capsys, "validate", str(project))
     assert code == 1 and "hook_type" in out
+
+
+def test_validate_stage_flag_checks_only_that_stage(project, capsys):
+    def strip(spec):
+        spec["sources"] = {}
+        for field in ("narration", "cuts", "title", "description", "tags"):
+            spec["videos"][0].pop(field)
+
+    _edit_spec(project, strip)
+    code, out = _run(capsys, "validate", str(project), "--stage", "idea")
+    assert code == 0 and "OK" in out
+    code, _ = _run(capsys, "validate", str(project))
+    assert code == 1
 
 
 def test_fetch_refuses_oversized_without_changing_spec(project, capsys, monkeypatch):
@@ -74,42 +114,62 @@ def test_fetch_refuses_oversized_without_changing_spec(project, capsys, monkeypa
     assert (project / "artifacts" / "batch_spec.json").read_text(encoding="utf-8") == before
 
 
+def test_network_error_in_fetch_is_a_one_line_error(project, capsys, monkeypatch):
+    import requests
+
+    def offline(*_a, **_k):
+        raise requests.ConnectionError("offline")
+
+    monkeypatch.setattr(shorts_batch, "_resolve_candidate", offline)
+    code, out = _run(capsys, "fetch", str(project), "--source", "nasa", "--query", "q",
+                     "--clip-id", "x", "--key", "k")
+    assert code == 1 and _one_line(out) and "Traceback" not in out
+
+
 def test_render_refuses_when_spec_invalid(project, capsys, monkeypatch):
-    spec = _spec()
-    spec["videos"][0]["hook_type"] = "clickbait"
-    save_spec(project, spec)
+    _edit_spec(project, lambda s: s["videos"][0].update(hook_type="clickbait"))
     monkeypatch.setattr(shorts_batch, "cut_segment", lambda *a, **k: pytest.fail("must not cut"))
     code, out = _run(capsys, "render", str(project))
     assert code == 1 and "hook_type" in out
 
 
 def test_render_refuses_short_cuts_before_cutting(project, capsys, monkeypatch):
-    batch = json.loads((project / "artifacts" / "shorts_batch.json").read_text(encoding="utf-8"))
-    batch["videos"][0]["audio_duration"] = 30.0  # cuts total 4.0
-    write_batch(project, batch)
+    _edit_batch(project, audio_duration=30.0)  # cuts total 4.0
     monkeypatch.setattr(shorts_batch, "cut_segment", lambda *a, **k: pytest.fail("must not cut"))
     code, out = _run(capsys, "render", str(project))
     assert code == 1 and "cuts total" in out
 
 
 def test_render_without_voice_says_so(project, capsys):
-    batch = json.loads((project / "artifacts" / "shorts_batch.json").read_text(encoding="utf-8"))
-    del batch["videos"][0]["audio_duration"]
+    batch = read_batch(project)
+    for key in ("audio", "captions", "audio_duration", "voice_hash"):
+        del batch["videos"][0][key]
     write_batch(project, batch)
     code, out = _run(capsys, "render", str(project))
     assert code == 1 and "voice" in out
 
 
+def test_stale_voice_is_dropped_when_narration_changes(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s["videos"][0].update(narration="A completely different script now."))
+    monkeypatch.setattr(shorts_batch, "cut_segment", lambda *a, **k: pytest.fail("must not cut"))
+    code, out = _run(capsys, "render", str(project))
+    assert code == 1 and "voice" in out and "Traceback" not in out
+
+
 def test_missing_ffmpeg_prints_one_line_and_returns_1(project, capsys, monkeypatch):
-    batch = json.loads((project / "artifacts" / "shorts_batch.json").read_text(encoding="utf-8"))
-    batch["videos"][0]["audio_duration"] = 4.0
-    write_batch(project, batch)
+    _edit_batch(project, audio_duration=4.0)
     (project / "assets" / "audio").mkdir(parents=True)
     (project / "assets" / "audio" / "v1.captions.json").write_text("[]", encoding="utf-8")
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     code, out = _run(capsys, "render", str(project))
-    lines = [line for line in out.splitlines() if line.strip()]
-    assert code == 1 and len(lines) == 1 and "ffmpeg" in lines[0] and "Traceback" not in out
+    assert code == 1 and _one_line(out) and "ffmpeg" in out and "Traceback" not in out
+
+
+def test_voice_validates_the_spec_first(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s["sources"]["a"].pop("clip_id"))
+    monkeypatch.setattr(shorts_batch, "_registry", lambda: pytest.fail("must not touch tools"))
+    code, out = _run(capsys, "voice", str(project))
+    assert code == 1 and "clip_id" in out and "Traceback" not in out
 
 
 def test_checkpoints_idea_only_leaves_gate_open_without_approve(project, capsys, monkeypatch):
@@ -144,6 +204,33 @@ def test_checkpoints_refuse_when_audit_fails(project, capsys, monkeypatch):
     assert code == 1 and "missing render: v1" in out
 
 
+def test_checkpoints_refuse_an_unvoiced_video(project, capsys, monkeypatch):
+    def add_video(spec):
+        second = json.loads(json.dumps(spec["videos"][0]))
+        second.update(id="v2", cuts=[{"source": "a", "in": 20.0, "dur": 2.0}])
+        spec["videos"].append(second)
+
+    _edit_spec(project, add_video)
+    monkeypatch.setattr(shorts_batch, "write_stage_records", lambda *a, **k: pytest.fail("must not write"))
+    code, out = _run(capsys, "checkpoints", str(project))
+    assert code == 1 and "v2" in out and "voice" in out and "Traceback" not in out
+
+
+def test_checkpoints_refuse_a_stale_render(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s["videos"][0]["cuts"][0].update(dur=2.5))  # cuts changed after render
+    monkeypatch.setattr(shorts_batch, "write_stage_records", lambda *a, **k: pytest.fail("must not write"))
+    code, out = _run(capsys, "checkpoints", str(project))
+    assert code == 1 and "out of date" in out
+
+
+def test_export_refuses_a_stale_render(project, capsys, monkeypatch):
+    _edit_spec(project, lambda s: s["videos"][0]["cuts"][0].update(dur=2.5))
+    monkeypatch.setattr(shorts_batch, "audit_project", lambda *a, **k: {"ok": True, "violations": []})
+    monkeypatch.setattr(shorts_batch, "export_videos", lambda *a, **k: pytest.fail("must not export"))
+    code, out = _run(capsys, "export", str(project), "--approved", "v1")
+    assert code == 1 and "out of date" in out
+
+
 def test_export_refuses_when_audit_fails(project, capsys, monkeypatch):
     monkeypatch.setattr(shorts_batch, "audit_project",
                         lambda *a, **k: {"ok": False, "violations": ["zero_cost: x"]})
@@ -154,6 +241,16 @@ def test_export_refuses_when_audit_fails(project, capsys, monkeypatch):
 
 def test_export_passes_approved_ids_in_order(project, capsys, monkeypatch):
     seen = {}
+
+    def add_video(spec):
+        for vid, start in (("v2", 20.0), ("v3", 30.0)):
+            extra = json.loads(json.dumps(spec["videos"][0]))
+            extra.update(id=vid, cuts=[{"source": "a", "in": start, "dur": 2.0}])
+            spec["videos"].append(extra)
+
+    _edit_spec(project, add_video)
+    spec = load_spec(project)
+    write_batch(project, _voiced_batch(spec))
     monkeypatch.setattr(shorts_batch, "audit_project", lambda *a, **k: {"ok": True, "violations": []})
     monkeypatch.setattr(shorts_batch, "_registry", lambda: object())
     monkeypatch.setattr(shorts_batch, "export_videos",
@@ -164,4 +261,14 @@ def test_export_passes_approved_ids_in_order(project, capsys, monkeypatch):
 
 def test_unknown_project_is_a_one_line_error(tmp_path, capsys):
     code, out = _run(capsys, "validate", str(tmp_path / "nope"))
-    assert code == 1 and len([ln for ln in out.splitlines() if ln.strip()]) == 1
+    assert code == 1 and _one_line(out)
+
+
+def test_non_ascii_violation_survives_piped_stdout(project):
+    """Windows pipes stdout as cp1252 unless the CLI sets UTF-8 itself."""
+    _edit_spec(project, lambda s: s["videos"][0].update(hook_type="火星"))
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "shorts_batch.py"), "validate", str(project)],
+                          capture_output=True, cwd=REPO, env=env)
+    out = proc.stdout.decode("utf-8", errors="replace")
+    assert proc.returncode == 1 and "hook_type" in out and "charmap" not in out

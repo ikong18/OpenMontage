@@ -114,3 +114,19 @@ def test_export_marks_private_shorts_and_writes_publish_stage(ready):
     checkpoint = read_checkpoint(projects, PID, "publish")
     assert checkpoint["status"] == "completed"
     assert len(checkpoint["artifacts"]["publish_log"]["entries"]) == 1
+
+
+# --- review fixes ---
+
+
+def test_export_refuses_when_render_is_newer_than_the_review(ready):
+    import os
+    import time
+
+    projects, spec = ready
+    render = projects / PID / "renders" / "v1.mp4"
+    future = time.time() + 3600
+    os.utime(render, (future, future))
+    with pytest.raises(ValueError) as exc:
+        export_videos(projects, spec, ["v1"], _FakeRegistry())
+    assert "v1" in str(exc.value) and "after the review" in str(exc.value)

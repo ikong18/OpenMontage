@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 HOOK_TYPES = ("question", "shocking_stat", "myth_bust", "comparison", "countdown")
 SPEC_FILE = Path("artifacts") / "batch_spec.json"
 MAX_TITLE = 100
+STAGES = ("idea", "script", "visuals", "full")
 
-_TOP_REQUIRED = ("project_id", "sources", "videos")
-_VIDEO_REQUIRED = (
-    "id", "topic", "hook_type", "hook_text", "narration",
-    "claims", "cuts", "title", "description", "tags",
-)
+# Ids become file names (assets/audio/<id>.wav, renders/<id>.mp4) and folder names,
+# so they must not be able to escape the project directory.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+_VIDEO_FIELDS = {
+    "idea": ("id", "topic", "hook_type", "hook_text", "claims"),
+    "script": ("id", "topic", "hook_type", "hook_text", "claims", "narration"),
+    "visuals": ("id", "topic", "hook_type", "hook_text", "claims", "narration", "cuts"),
+    "full": ("id", "topic", "hook_type", "hook_text", "claims", "narration", "cuts",
+             "title", "description", "tags"),
+}
 
 
 def load_spec(project_dir: Path) -> dict[str, Any]:
@@ -40,17 +48,56 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def validate_spec(spec: dict[str, Any], project_dir: Path) -> list[str]:
-    violations: list[str] = []
-    for field in _TOP_REQUIRED:
-        if field not in spec:
-            violations.append(f"spec: missing {field}")
-    sources = spec.get("sources") if isinstance(spec.get("sources"), dict) else {}
-    videos = spec.get("videos") if isinstance(spec.get("videos"), list) else []
-    if not videos:
-        violations.append("spec: no videos")
+def _inside(project: Path, relative: str) -> bool:
+    try:
+        return (project / relative).resolve().is_relative_to(project.resolve())
+    except (OSError, ValueError):
+        return False
 
-    checked_sources: set[str] = set()
+
+def validate_spec(spec: dict[str, Any], project_dir: Path, stage: str = "full") -> list[str]:
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage '{stage}' (use {', '.join(STAGES)})")
+    project = Path(project_dir)
+    violations: list[str] = []
+
+    project_id = spec.get("project_id")
+    if not isinstance(project_id, str) or not _SAFE_ID.match(project_id):
+        violations.append("spec: project_id missing or not a safe name (letters, digits, - and _)")
+    elif project_id != project.resolve().name:
+        violations.append(
+            f"spec: project_id '{project_id}' does not match the folder name '{project.resolve().name}'"
+        )
+
+    needs_sources = stage in ("visuals", "full")
+    raw_sources = spec.get("sources")
+    if raw_sources is None:
+        sources: dict[str, Any] = {}
+        if needs_sources:
+            violations.append("spec: missing sources")
+    elif isinstance(raw_sources, dict):
+        sources = raw_sources
+    else:
+        sources = {}
+        violations.append("spec: sources must be an object")
+
+    for key, src in sources.items():
+        if not isinstance(src, dict):
+            violations.append(f"source '{key}': must be an object with path and clip_id")
+            continue
+        for field in ("path", "clip_id"):
+            if not isinstance(src.get(field), str) or not src[field].strip():
+                violations.append(f"source '{key}': missing {field}")
+        path = src.get("path")
+        if isinstance(path, str) and path and not _inside(project, path):
+            violations.append(f"source '{key}': path is outside the project folder: {path}")
+
+    videos = spec.get("videos")
+    if not isinstance(videos, list) or not videos:
+        violations.append("spec: no videos")
+        videos = []
+
+    checked_files: set[str] = set()
     seen_ids: set[str] = set()
     ranges: dict[str, list[tuple[float, float, str]]] = {}
 
@@ -58,46 +105,62 @@ def validate_spec(spec: dict[str, Any], project_dir: Path) -> list[str]:
         if not isinstance(video, dict):
             violations.append(f"video at index {index}: not an object")
             continue
-        vid = str(video.get("id") or f"#{index}")
-        for field in _VIDEO_REQUIRED:
-            if field not in video or video[field] in (None, ""):
-                if field == "tags" and video.get(field) == []:
-                    continue
-                violations.append(f"{vid}: missing {field}")
-        if vid in seen_ids:
-            violations.append(f"{vid}: duplicate video id")
-        seen_ids.add(vid)
-        if video.get("hook_type") and video["hook_type"] not in HOOK_TYPES:
-            violations.append(f"{vid}: hook_type '{video['hook_type']}' not in {', '.join(HOOK_TYPES)}")
+        vid = video.get("id")
+        label = vid if isinstance(vid, str) and vid else f"#{index}"
+        if not isinstance(vid, str) or not _SAFE_ID.match(vid):
+            violations.append(f"{label}: id must be letters, digits, - and _ (no paths or spaces)")
+        elif vid in seen_ids:
+            violations.append(f"{label}: duplicate video id")
+        else:
+            seen_ids.add(vid)
+
+        for field in _VIDEO_FIELDS[stage]:
+            value = video.get(field)
+            if field == "tags":
+                if not isinstance(value, list):
+                    violations.append(f"{label}: missing {field}")
+            elif value in (None, "", []):
+                violations.append(f"{label}: missing {field}")
+
+        hook = video.get("hook_type")
+        if hook and hook not in HOOK_TYPES:
+            violations.append(f"{label}: hook_type '{hook}' not in {', '.join(HOOK_TYPES)}")
         if len(str(video.get("title") or "")) > MAX_TITLE:
-            violations.append(f"{vid}: title longer than {MAX_TITLE} characters")
+            violations.append(f"{label}: title longer than {MAX_TITLE} characters")
 
         for claim in video.get("claims") or []:
             srcs = claim.get("sources") if isinstance(claim, dict) else None
-            if not any(str(s).startswith(("http://", "https://")) for s in srcs or []):
-                violations.append(f"{vid}: claim has no http(s) source")
+            if not isinstance(srcs, list) or not any(
+                str(s).startswith(("http://", "https://")) for s in srcs
+            ):
+                violations.append(f"{label}: claim has no http(s) source")
 
         for cut in video.get("cuts") or []:
             key = cut.get("source") if isinstance(cut, dict) else None
-            if key not in sources:
-                violations.append(f"{vid}: cut uses unknown source '{key}'")
+            if not isinstance(key, str) or key not in sources:
+                violations.append(f"{label}: cut uses unknown source '{key}'")
                 continue
-            if key not in checked_sources:
-                checked_sources.add(key)
-                rel = sources[key].get("path", "")
-                if not (Path(project_dir) / rel).is_file():
+            src = sources[key]
+            if not isinstance(src, dict):
+                continue
+            rel = src.get("path")
+            if isinstance(rel, str) and rel and rel not in checked_files:
+                checked_files.add(rel)
+                if _inside(project, rel) and not (project / rel).is_file():
                     violations.append(f"source '{key}': file not found: {rel}")
             start, dur = cut.get("in"), cut.get("dur")
-            if not _number(start) or not _number(dur) or dur <= 0:
-                violations.append(f"{vid}: cut needs numeric 'in' and 'dur' > 0")
+            if not _number(start) or not _number(dur) or dur <= 0 or start < 0:
+                violations.append(f"{label}: cut needs numeric 'in' >= 0 and 'dur' > 0")
                 continue
-            ranges.setdefault(key, []).append((float(start), float(start) + float(dur), vid))
+            # Same footage can sit under two keys; identity is the clip, not the key.
+            identity = str(src.get("clip_id") or src.get("path"))
+            ranges.setdefault(identity, []).append((float(start), float(start) + float(dur), label))
 
-    for key, spans in ranges.items():
+    for identity, spans in ranges.items():
         spans.sort()
         for (a0, a1, av), (b0, b1, bv) in zip(spans, spans[1:]):
             if b0 < a1:
                 violations.append(
-                    f"source '{key}': cuts overlap ({av} {a0:g}-{a1:g} and {bv} {b0:g}-{b1:g})"
+                    f"clip '{identity}': cuts overlap ({av} {a0:g}-{a1:g} and {bv} {b0:g}-{b1:g})"
                 )
     return violations

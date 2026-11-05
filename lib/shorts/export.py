@@ -6,6 +6,7 @@ uploaded; every entry is marked private.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,11 @@ def export_videos(
         raise ValueError(f"unknown video id(s): {', '.join(unknown)}")
 
     project_dir = Path(projects_dir) / pid
+    approved_at = datetime.fromisoformat(review["timestamp"]).timestamp()
+    for vid in approved_ids:
+        render = project_dir / "renders" / f"{vid}.mp4"
+        if render.exists() and render.stat().st_mtime > approved_at + 1:
+            raise ValueError(f"{vid}: the render changed after the review was approved; review it again")
     entries: list[dict[str, Any]] = []
     for position, vid in enumerate(approved_ids, start=1):
         video = by_id[vid]

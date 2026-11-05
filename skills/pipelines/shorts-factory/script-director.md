@@ -52,4 +52,4 @@ Every factual statement in the script is a `claims` entry with at least one http
 
 Put each script into its video in `batch_spec.json`: `narration` (the full spoken text, hook first),
 `hook_text`, and `claims` (each with http(s) `sources`). `cuts`, `title`, `description` and `tags` come in the
-next stages. Run `python scripts/shorts_batch.py validate projects/<id>` and fix every violation before moving on.
+next stages. Run `python scripts/shorts_batch.py validate projects/<id> --stage script` and fix every violation it reports before moving on (it checks only the fields up to this stage; a plain `validate` runs at the end).

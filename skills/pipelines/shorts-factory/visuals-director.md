@@ -51,5 +51,5 @@ Download each chosen clip with
 It refuses files over `--max-mb` (default 400) and files of unknown size, and records the source URL and
 licence in the spec's `sources`. Then fill each video's `cuts` as `{"source": "<name>", "in": <seconds>,
 "dur": <seconds>}`; set the source's `mode` to `blurpad` for 4:3 or pillarboxed footage. Run
-`python scripts/shorts_batch.py validate projects/<id>`: it flags overlapping ranges on the same source, so no
+`python scripts/shorts_batch.py validate projects/<id> --stage visuals`: it flags overlapping ranges on the same source, so no
 footage is reused across the batch.

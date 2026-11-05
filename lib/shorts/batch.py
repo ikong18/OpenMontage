@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 BATCH_FILE = Path("artifacts") / "shorts_batch.json"
+
+
+def _digest(payload: Any) -> str:
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def voice_fingerprint(spec: dict[str, Any], video: dict[str, Any]) -> str:
+    """Changes when the narration or the voice settings change (so old audio is stale)."""
+    return _digest({"narration": video.get("narration"), "voice": spec.get("voice") or {}})
+
+
+def render_fingerprint(spec: dict[str, Any], video: dict[str, Any]) -> str:
+    """Changes when anything that shapes the render changes (cuts, footage, narration, voice)."""
+    sources = spec.get("sources") or {}
+    used = {c.get("source"): sources.get(c.get("source")) for c in video.get("cuts") or []}
+    return _digest({"cuts": video.get("cuts"), "sources": used, "voice": voice_fingerprint(spec, video)})
 
 
 def derive_batch(spec: dict[str, Any]) -> dict[str, Any]:

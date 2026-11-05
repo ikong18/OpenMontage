@@ -55,3 +55,22 @@ def test_fetch_unknown_size_refused_without_opt_in(tmp_path):
     cand = SimpleNamespace(download_url="https://example.com/x.mp4")
     with pytest.raises(SizeCapError):
         fetch_clip(cand, tmp_path / "x.mp4", head=lambda _u: None, download=lambda c, d: d)
+
+
+# --- review fixes ---
+
+
+def test_head_size_treats_error_status_as_unknown(monkeypatch):
+    from lib.shorts import fetch as fetch_module
+
+    fake = SimpleNamespace(status_code=403, headers={"content-length": "243"})
+    monkeypatch.setattr("requests.head", lambda *a, **k: fake)
+    assert fetch_module._head_size("https://example.com/x.mp4") is None
+
+
+def test_head_size_reads_content_length_on_success(monkeypatch):
+    from lib.shorts import fetch as fetch_module
+
+    fake = SimpleNamespace(status_code=200, headers={"content-length": "1234"})
+    monkeypatch.setattr("requests.head", lambda *a, **k: fake)
+    assert fetch_module._head_size("https://example.com/x.mp4") == 1234

@@ -50,7 +50,7 @@ Show a table of topics, angles, hook types and sources. Record the choice in `de
 
 Record the approved topics as `videos[]` in `projects/<id>/artifacts/batch_spec.json` (id, topic, hook_type,
 hook_text, claims; the rest is filled by later stages), then run
-`python scripts/shorts_batch.py validate projects/<id>`. Present the topics and the runtime decision to the
+`python scripts/shorts_batch.py validate projects/<id> --stage idea` (it checks only the idea-stage fields). Present the topics and the runtime decision to the
 owner. Only after the owner approves in chat run
 `python scripts/shorts_batch.py checkpoints projects/<id> --idea-only --approve idea`; without `--approve` the
 command records `awaiting_human` and leaves the gate open.
