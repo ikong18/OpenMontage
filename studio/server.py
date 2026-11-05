@@ -81,6 +81,10 @@ def create_app(
             "gates": {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")},
             "jobs": recent,
             "running": running,
+            "renders": {str(v.get("id")): (project / "renders" / f"{v.get('id')}.mp4").is_file()
+                        for v in spec.get("videos") or []},
+            "renders_stamp": max([int(p.stat().st_mtime) for p in (project / "renders").glob("*.mp4")] or [0]),
+            "exports": sorted(p.name for p in (project / "export").glob("*") if p.is_dir()),
         }
 
     app.state.batch_view = batch_view

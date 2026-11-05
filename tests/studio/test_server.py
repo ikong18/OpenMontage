@@ -143,3 +143,17 @@ def test_events_stream_says_hello(env):
     with env.client.stream("GET", f"/api/batches/{bid}/events") as resp:
         first = next(resp.iter_lines())
     assert resp.status_code == 200 and json.loads(first.removeprefix("data: "))["type"] == "hello"
+
+
+def test_batch_view_lists_renders_and_exports(env):
+    bid = create_batch(env.projects, "View", "youtube_shorts")
+    project = env.projects / bid
+    save = load_spec(project)
+    save["videos"] = [_idea_video()]
+    from lib.shorts.spec import save_spec
+    save_spec(project, save)
+    (project / "renders").mkdir()
+    (project / "renders" / "v1.mp4").write_bytes(b"r")
+    (project / "export" / "01-v1").mkdir(parents=True)
+    data = env.client.get(f"/api/batches/{bid}").json()
+    assert data["renders"] == {"v1": True} and data["exports"] == ["01-v1"] and data["renders_stamp"] > 0

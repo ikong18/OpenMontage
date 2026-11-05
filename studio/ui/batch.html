@@ -1,1 +1,29 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="studio-token" content="__STUDIO_TOKEN__"><title>Studio</title></head><body>Studio</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="studio-token" content="__STUDIO_TOKEN__">
+  <title>Studio batch</title>
+  <link rel="stylesheet" href="/ui/studio.css">
+</head>
+<body data-page="batch">
+  <header class="top">
+    <a href="/" class="back">&larr; Batches</a>
+    <h1 id="batch-title">Batch</h1>
+    <span id="batch-platform" class="pill"></span>
+  </header>
+  <div class="layout">
+    <nav id="rail" class="rail" aria-label="Steps"></nav>
+    <main class="wrap">
+      <p id="banner" class="error" hidden></p>
+      <section id="panel" class="card"></section>
+      <section class="card">
+        <h3>Latest job <span id="job-status" class="pill"></span></h3>
+        <pre id="job-log" class="log">No jobs yet.</pre>
+      </section>
+    </main>
+  </div>
+  <script src="/ui/studio.js"></script>
+</body>
+</html>
