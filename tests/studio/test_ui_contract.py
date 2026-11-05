@@ -86,3 +86,8 @@ def test_typed_topics_can_be_researched_and_provider_switched():
                    "topicIssues", "Approving starts the scripts by itself"):
         assert needle in js, needle
     assert 'id="settings"' in html
+
+
+def test_research_buttons_follow_what_is_typed():
+    js = _read("studio.js")
+    assert "c.research.disabled" in js and "researchAllBtn" in js

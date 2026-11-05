@@ -210,6 +210,7 @@ function initBatch() {
     const count = h("input", { type: "number", min: "1", max: "12", value: lastParams.topics ? lastParams.topics.count : "5", style: "width:80px", disabled: approved });
     const checks = [];
     let saveBtn = null;
+    let researchAllBtn = null;
     const refreshChecks = () => {
       let bad = false;
       checks.forEach((c) => {
@@ -219,7 +220,11 @@ function initBatch() {
         c.note.textContent = issues.missing.length && !issues.fatal.length ? "Not researched yet - still needs: " + issues.missing.join(", ") + "." : "";
         c.chip.textContent = c.v.hook_type || "no hook yet";
         c.chip.className = "chip " + (c.v.hook_type || "");
+        const typed = !!String(c.v.topic || "").trim();
+        c.research.disabled = busy() || !typed;
+        c.research.title = busy() ? "A job is running - wait for it to finish." : typed ? "" : "Type the topic first.";
       });
+      if (researchAllBtn) researchAllBtn.disabled = busy() || incompleteTopics().length === 0;
       if (saveBtn) {
         saveBtn.disabled = busy() || bad || draft.length === 0;
         saveBtn.title = bad ? "Fix the highlighted topics first." : "";
@@ -238,7 +243,9 @@ function initBatch() {
       const chip = h("span", { class: "chip " + v.hook_type }, v.hook_type);
       const node = h("div", { class: "error small" });
       const note = h("div", { class: "muted small" });
-      checks.push({ v, node, note, chip });
+      const research = actionButton("Research this topic", () => researchTopics([v.id]), !busy() && !!String(v.topic || "").trim(), "primary",
+        busy() ? reasonFor(null) : "Type the topic first.");
+      checks.push({ v, node, note, chip, research });
       out.push(h("div", { class: "video" },
         h("h4", {}, v.id, chip),
         h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved, oninput: edit(v, "topic", null, refreshChecks) })),
@@ -251,20 +258,20 @@ function initBatch() {
         h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved, oninput: edit(v, "hook_text", null, refreshChecks) })),
         node, note,
         approved ? null : h("div", { class: "row" },
-          actionButton("Research this topic", () => researchTopics([v.id]), !busy() && !!String(v.topic || "").trim(), "primary",
-            busy() ? reasonFor(null) : "Type the topic first."),
+          research,
           actionButton("Remove", () => { draft.splice(i, 1); dirty = true; renderPanel(true); }, true))));
     });
     if (!approved) {
       saveBtn = actionButton("Save edits", () => saveVideos(topicSaveStage()), !busy() && draft.length > 0, "", reasonFor(null));
+      researchAllBtn = actionButton("Research all incomplete", () => researchTopics(incompleteTopics().map((v) => v.id)),
+        !busy() && incompleteTopics().length > 0, "", busy() ? reasonFor(null) : "Every topic already has sources.");
       out.push(h("div", { class: "row" },
         actionButton("Add topic", () => {
           const n = Math.max(0, ...draft.map((v) => Number(String(v.id).replace(/\D/g, "")) || 0)) + 1;
           draft.push({ id: "v" + n, topic: "", hook_type: "", hook_text: "", topic_sources: [] });
           dirty = true; renderPanel(true);
         }, !busy(), "", reasonFor(null)),
-        actionButton("Research all incomplete", () => researchTopics(incompleteTopics().map((v) => v.id)),
-          !busy() && incompleteTopics().length > 0, "", busy() ? reasonFor(null) : "Every topic already has sources."),
+        researchAllBtn,
         saveBtn));
     }
     out.push(h("div", { class: "gate-box" },
