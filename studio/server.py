@@ -62,7 +62,11 @@ def create_app(
 
     def page(name: str) -> HTMLResponse:
         html = (UI_DIR / name).read_text(encoding="utf-8").replace("__STUDIO_TOKEN__", token)
-        return HTMLResponse(html)
+        for asset in ("studio.js", "studio.css"):
+            path = UI_DIR / asset
+            if path.is_file():
+                html = html.replace(f"/ui/{asset}", f"/ui/{asset}?v={int(path.stat().st_mtime)}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     def batch_view(batch_id: str) -> dict[str, Any]:
         project = project_or_404(batch_id)

@@ -6,7 +6,10 @@ const STEPS = [
   ["topics", "1  Topics"], ["script", "2  Script"], ["footage", "3  Footage"],
   ["render", "4  Voice and render"], ["review", "5  Review"], ["export", "6  Export"],
 ];
+const STEP_LABEL = Object.fromEntries(STEPS.map(([k, l]) => [k, l.replace(/^\d+\s+/, "")]));
 const HOOKS = ["question", "shocking_stat", "myth_bust", "comparison", "countdown"];
+const WORDS_PER_SECOND = 2.9;
+const SEG_COLORS = 6;
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -45,6 +48,24 @@ async function api(method, url, body) {
 const $ = (id) => document.getElementById(id);
 const isHttp = (s) => /^https?:\/\//i.test(String(s));
 
+function elapsed(iso) {
+  const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+}
+
+function estimateSeconds(text) {
+  const words = (String(text || "").trim().match(/\S+/g) || []).length;
+  return { words, seconds: Math.round(words / WORDS_PER_SECOND) };
+}
+
+function toast(msg, kind) {
+  const box = $("toasts");
+  if (!box) return;
+  const el = h("div", { class: "toast " + (kind || "") }, msg);
+  box.append(el);
+  setTimeout(() => el.remove(), 6500);
+}
+
 /* ------------------------------------------------------------------ home */
 
 async function initHome() {
@@ -52,11 +73,17 @@ async function initHome() {
     const rows = await api("GET", "/api/batches");
     const list = $("batch-list");
     list.replaceChildren();
-    if (!rows.length) list.append(h("li", { class: "muted" }, "No batches yet."));
+    if (!rows.length) list.append(h("li", { class: "muted" }, "No batches yet - create one above."));
     for (const b of rows) {
+      const done = b.current_step === "done";
+      const pct = Math.round((b.steps_done / b.steps_total) * 100);
       list.append(h("li", {},
-        h("a", { href: "/batch/" + encodeURIComponent(b.id) }, b.title),
-        h("span", { class: "muted" }, `${b.platform} - ${b.video_count} videos`)));
+        h("div", {},
+          h("a", { href: "/batch/" + encodeURIComponent(b.id) }, b.title),
+          h("div", { class: "muted small" }, `${b.platform} - ${b.video_count} videos`)),
+        h("div", { class: "row" },
+          h("span", { class: "progress", title: `${b.steps_done} of ${b.steps_total} steps done` }, h("span", { style: `width:${pct}%` })),
+          h("span", { class: "chip" }, done ? "Done" : "Next: " + (STEP_LABEL[b.current_step] || b.current_step)))));
     }
   }
   $("new-batch").addEventListener("submit", async (ev) => {
@@ -81,120 +108,294 @@ function initBatch() {
   let draft = [];
   let dirty = false;
   let lastSignature = "";
+  let prevJob = null;
+  let retryFn = null;
+  const lastParams = {};
 
-  const banner = (msg) => { const b = $("banner"); b.textContent = msg || ""; b.hidden = !msg; };
   const busy = () => !!(data && data.running);
   const canRun = (step) => data && data.steps[step] !== "locked" && !busy();
 
-  async function action(fn) {
+  function banner(msg, retry) {
+    $("banner-text").textContent = msg || "";
+    $("banner").hidden = !msg;
+    retryFn = retry || null;
+    $("banner-retry").hidden = !retry;
+  }
+  $("banner-close").addEventListener("click", () => banner(""));
+  $("banner-retry").addEventListener("click", () => { const fn = retryFn; banner(""); if (fn) fn(); });
+  window.addEventListener("beforeunload", (ev) => { if (dirty) { ev.preventDefault(); ev.returnValue = ""; } });
+
+  async function action(fn, retry) {
     banner("");
-    try { await fn(); } catch (e) { banner(e.message); }
+    try { await fn(); } catch (e) { banner(e.message, retry); }
     await refresh(true);
   }
-  const runStep = (step, params) => action(() => api("POST", `${base}/steps/${step}/run`, params || {}));
-  const approve = (gate) => action(() => api("POST", `${base}/gates/${gate}/approve`, {}));
+  const runStep = (step, params) => {
+    lastParams[step] = params || {};
+    return action(() => api("POST", `${base}/steps/${step}/run`, params || {}), () => runStep(step, params));
+  };
+  const approve = (gate) => action(() => api("POST", `${base}/gates/${gate}/approve`, {}), () => approve(gate));
   const saveVideos = (stage) => action(async () => {
     await api("PUT", `${base}/spec?stage=${stage}`, { videos: draft });
     dirty = false;
+    toast("Edits saved.", "ok");
   });
 
-  function edit(obj, key, parse) {
-    return (ev) => { obj[key] = parse ? parse(ev.target.value) : ev.target.value; dirty = true; };
+  function select(step) {
+    if (dirty && !confirm("You have unsaved edits. Leave this step without saving?")) return;
+    selected = step;
+    dirty = false;
+    resetDraft();
+    renderPanel(true);
+    renderRail();
+    nextBanner();
   }
 
-  function actionButton(label, onclick, enabled, cls) {
-    return h("button", { class: cls || "", onclick, disabled: !enabled }, label);
+  function reasonFor(step, extra) {
+    if (busy()) return "A job is running - wait for it to finish.";
+    if (step && data.steps[step] === "locked") return "Locked until the previous step is done.";
+    return extra || "";
   }
 
-  /* ---- panels */
+  function actionButton(label, onclick, enabled, cls, why) {
+    return h("button", { class: cls || "", onclick, disabled: !enabled, title: enabled ? null : (why || null) }, label);
+  }
+
+  const edit = (obj, key, parse, after) => (ev) => {
+    obj[key] = parse ? parse(ev.target.value) : ev.target.value;
+    dirty = true;
+    if (after) after();
+  };
+
+  /* ---- topics */
+  const validateTopic = (v) => {
+    const m = [];
+    if (!String(v.topic || "").trim()) m.push("Add a topic.");
+    if (!HOOKS.includes(v.hook_type)) m.push("Pick a hook type.");
+    if (!String(v.hook_text || "").trim()) m.push("Write the first spoken sentence.");
+    if (!isHttp((v.topic_sources || [])[0])) m.push("Add a source page: a link that starts with http or https.");
+    return m;
+  };
+
   function topicsPanel() {
     const approved = data.gates.idea === "approved";
-    const theme = h("input", { value: "space facts", disabled: approved });
-    const count = h("input", { type: "number", min: "1", max: "12", value: "5", style: "width:80px", disabled: approved });
+    const theme = h("input", { value: lastParams.topics ? lastParams.topics.theme : "space facts", disabled: approved });
+    const count = h("input", { type: "number", min: "1", max: "12", value: lastParams.topics ? lastParams.topics.count : "5", style: "width:80px", disabled: approved });
+    const checks = [];
+    let saveBtn = null;
+    const refreshChecks = () => {
+      let bad = false;
+      checks.forEach((c) => {
+        const problems = validateTopic(c.v);
+        bad = bad || problems.length > 0;
+        c.node.textContent = problems.join(" ");
+        c.chip.textContent = c.v.hook_type;
+        c.chip.className = "chip " + c.v.hook_type;
+      });
+      if (saveBtn) {
+        saveBtn.disabled = busy() || bad || draft.length === 0;
+        saveBtn.title = bad ? "Fix the highlighted topics first." : "";
+      }
+    };
     const out = [
       h("h2", {}, "Choose topics"),
       h("p", { class: "muted" }, "Ask Claude for topic ideas, edit them, then approve. Nothing is made until you approve."),
       h("div", { class: "row" },
         h("label", {}, "Theme", theme), h("label", {}, "How many", count),
         actionButton("Suggest topics", () => runStep("topics", { theme: theme.value, count: Number(count.value) }),
-          canRun("topics") && !approved, "primary")),
+          canRun("topics") && !approved, "primary", approved ? "Topics are already approved." : reasonFor("topics"))),
     ];
     draft.forEach((v, i) => {
       const url = (v.topic_sources || [])[0] || "";
+      const chip = h("span", { class: "chip " + v.hook_type }, v.hook_type);
+      const node = h("div", { class: "error small" });
+      checks.push({ v, node, chip });
       out.push(h("div", { class: "video" },
-        h("h4", {}, v.id),
-        h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved, oninput: edit(v, "topic") })),
+        h("h4", {}, v.id, chip),
+        h("label", {}, "Topic", h("input", { value: v.topic || "", disabled: approved, oninput: edit(v, "topic", null, refreshChecks) })),
         h("div", { class: "grid2" },
-          h("label", {}, "Hook type", h("select", { disabled: approved, onchange: edit(v, "hook_type") },
+          h("label", {}, "Hook type", h("select", { disabled: approved, onchange: edit(v, "hook_type", null, refreshChecks) },
             HOOKS.map((t) => h("option", { value: t, selected: t === v.hook_type }, t)))),
-          h("label", {}, "Source page (URL)", h("input", { value: url, disabled: approved,
-            oninput: (ev) => { v.topic_sources = [ev.target.value]; dirty = true; } }))),
-        h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved, oninput: edit(v, "hook_text") })),
+          h("label", {}, "Source page (link)", h("input", { value: url, disabled: approved,
+            oninput: (ev) => { v.topic_sources = [ev.target.value]; dirty = true; refreshChecks(); } }))),
+        h("label", {}, "First spoken sentence", h("input", { value: v.hook_text || "", disabled: approved, oninput: edit(v, "hook_text", null, refreshChecks) })),
+        node,
         approved ? null : actionButton("Remove", () => { draft.splice(i, 1); dirty = true; renderPanel(true); }, true)));
     });
     if (!approved) {
+      saveBtn = actionButton("Save edits", () => saveVideos("idea"), !busy() && draft.length > 0, "", reasonFor(null));
       out.push(h("div", { class: "row" },
         actionButton("Add topic", () => {
           const n = Math.max(0, ...draft.map((v) => Number(String(v.id).replace(/\D/g, "")) || 0)) + 1;
           draft.push({ id: "v" + n, topic: "", hook_type: "question", hook_text: "", topic_sources: [""] });
           dirty = true; renderPanel(true);
-        }, !busy()),
-        actionButton("Save edits", () => saveVideos("idea"), !busy() && draft.length > 0)));
+        }, !busy(), "", reasonFor(null)),
+        saveBtn));
     }
     out.push(h("div", { class: "gate-box" },
-      actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved, "gate"),
+      actionButton("Approve topics", () => approve("idea"), !busy() && !dirty && draft.length > 0 && !approved, "gate",
+        approved ? "Already approved." : dirty ? "Save your edits first." : draft.length ? reasonFor(null) : "Suggest or add topics first."),
       h("span", { class: "muted" }, approved ? "Approved." : dirty ? "Save your edits first." : "Your approval, not Claude's.")));
+    setTimeout(refreshChecks, 0);
     return out;
   }
 
+  /* ---- script */
+  function counterLine(getText, describe) {
+    const el = h("div", { class: "counter" });
+    const update = () => { const r = describe(getText()); el.textContent = r.text; el.className = "counter " + (r.level || ""); };
+    update();
+    return { el, update };
+  }
+
   function scriptPanel() {
+    const limits = data.limits || { max_description: 2000, max_hashtags: 30 };
     const out = [h("h2", {}, "Scripts"),
       h("p", { class: "muted" }, "Claude writes narration with a source for every claim. Read and edit before moving on."),
-      actionButton("Write scripts", () => runStep("script"), canRun("script"), "primary")];
+      actionButton("Write scripts", () => runStep("script"), canRun("script"), "primary", reasonFor("script"))];
     draft.forEach((v) => {
+      const nar = counterLine(() => v.narration, (t) => {
+        const { words, seconds } = estimateSeconds(t);
+        const level = seconds < 18 || seconds > 55 ? "warn" : "";
+        return { text: `${words} words - about ${seconds} s (aim for 18 to 55 s)`, level };
+      });
+      const title = counterLine(() => v.title, (t) => ({ text: `${String(t || "").length} / 100 characters`, level: String(t || "").length > 100 ? "over" : "" }));
+      const desc = counterLine(() => v.description, (t) => {
+        const len = String(t || "").length;
+        const tags = ((String(t || "").match(/#\w+/g) || []).length) + 1;
+        const over = len > limits.max_description || tags > limits.max_hashtags;
+        return { text: `${len} / ${limits.max_description} characters, ${tags} / ${limits.max_hashtags} hashtags (one is added at export)`, level: over ? "over" : "" };
+      });
       out.push(h("div", { class: "video" },
         h("h4", {}, `${v.id}: ${v.topic || ""}`),
-        h("label", {}, "Narration", h("textarea", { oninput: edit(v, "narration") }, v.narration || "")),
-        h("label", {}, "Title", h("input", { value: v.title || "", oninput: edit(v, "title") })),
-        h("label", {}, "Description", h("textarea", { oninput: edit(v, "description") }, v.description || "")),
+        h("label", {}, "Narration", h("textarea", { oninput: edit(v, "narration", null, nar.update) }, v.narration || "")), nar.el,
+        h("label", {}, "Title", h("input", { value: v.title || "", oninput: edit(v, "title", null, title.update) })), title.el,
+        h("label", {}, "Description", h("textarea", { oninput: edit(v, "description", null, desc.update) }, v.description || "")), desc.el,
         h("label", {}, "Tags (comma separated)", h("input", { value: (v.tags || []).join(", "),
           oninput: edit(v, "tags", (s) => s.split(",").map((t) => t.trim()).filter(Boolean)) })),
         h("div", { class: "muted" }, "Claims: ", (v.claims || []).map((c) =>
           h("div", {}, c.text, " - ", (c.sources || []).map((s) => (isHttp(s) ? h("a", { href: s, target: "_blank", rel: "noopener" }, s) : h("span", {}, s))))))));
     });
-    out.push(actionButton("Save edits", () => saveVideos("script"), canRun("script") && draft.length > 0 && dirty));
+    out.push(actionButton("Save edits", () => saveVideos("script"), canRun("script") && draft.length > 0 && dirty, "",
+      dirty ? reasonFor("script") : "Nothing to save yet."));
     return out;
+  }
+
+  /* ---- footage */
+  function cutProblems(videos, info) {
+    const problems = {};
+    const bySource = {};
+    videos.forEach((v, vi) => (v.cuts || []).forEach((c, ci) => {
+      const start = Number(c.in), len = Number(c.dur);
+      const id = `${vi}:${ci}`;
+      if (!(start >= 0) || !(len > 0)) { problems[id] = "Needs a start of 0 or more and a length above 0."; return; }
+      const meta = info[c.source];
+      if (meta && start + len > meta.duration + 0.05) problems[id] = `Runs past the end of the clip (${meta.duration.toFixed(1)} s long).`;
+      (bySource[c.source] = bySource[c.source] || []).push({ id, start, end: start + len, who: v.id });
+    }));
+    Object.values(bySource).forEach((segs) => {
+      segs.sort((a, b) => a.start - b.start);
+      for (let i = 1; i < segs.length; i++) {
+        if (segs[i].start < segs[i - 1].end) {
+          problems[segs[i].id] = problems[segs[i].id] || `Overlaps a cut of ${segs[i - 1].who} on the same clip.`;
+          problems[segs[i - 1].id] = problems[segs[i - 1].id] || `Overlaps a cut of ${segs[i].who} on the same clip.`;
+        }
+      }
+    });
+    return problems;
+  }
+
+  function usageBar(key, videos, info, problems) {
+    const meta = info[key];
+    let total = meta ? meta.duration : 0;
+    const segs = [];
+    videos.forEach((v, vi) => (v.cuts || []).forEach((c, ci) => {
+      if (c.source !== key) return;
+      segs.push({ vi, ci, start: Number(c.in) || 0, len: Number(c.dur) || 0, who: v.id });
+      if (!meta) total = Math.max(total, (Number(c.in) || 0) + (Number(c.dur) || 0));
+    }));
+    total = total || 1;
+    const bar = h("div", { class: "usage", title: meta ? `${meta.duration.toFixed(0)} s clip` : "clip length unknown" });
+    segs.forEach((s) => bar.append(h("div", {
+      class: `seg seg${s.vi % SEG_COLORS}` + (problems[`${s.vi}:${s.ci}`] ? " bad" : ""),
+      style: `left:${(s.start / total) * 100}%;width:${Math.max(0.4, (s.len / total) * 100)}%`,
+      title: `${s.who}: ${s.start.toFixed(1)} to ${(s.start + s.len).toFixed(1)} s`,
+    })));
+    return bar;
   }
 
   function footagePanel() {
     const keys = Object.keys((data.spec.sources) || {});
+    const info = data.source_info || {};
+    const rows = {};
+    const hosts = {};
+    let saveBtn = null;
+    const refreshViz = () => {
+      const problems = cutProblems(draft, info);
+      keys.forEach((k) => hosts[k] && hosts[k].replaceChildren(usageBar(k, draft, info, problems)));
+      Object.entries(rows).forEach(([id, tr]) => { tr.className = problems[id] ? "bad" : ""; tr.title = problems[id] || ""; });
+      if (saveBtn) {
+        saveBtn.disabled = busy() || !dirty || Object.keys(problems).length > 0;
+        saveBtn.title = Object.keys(problems).length ? "Fix the highlighted cuts first." : "";
+      }
+    };
     const out = [h("h2", {}, "Footage"),
-      h("p", { class: "muted" }, "Claude finds free clips (size-capped), looks at contact sheets and proposes cuts. Adjust the cut times if a shot is wrong."),
-      actionButton("Find footage", () => runStep("footage"), canRun("footage"), "primary")];
-    keys.forEach((k) => out.push(h("div", {}, h("div", { class: "muted" }, `${k} (one frame per few seconds, left to right)`),
-      h("img", { class: "sheet", src: `/media/${encodeURIComponent(batchId)}/review/sheet_${encodeURIComponent(k)}.png`,
-        alt: "contact sheet " + k, onerror: (ev) => { ev.target.hidden = true; } }))));
-    draft.forEach((v) => {
+      h("p", { class: "muted" }, "Claude finds free clips (size-capped), looks at contact sheets and proposes cuts. Adjust the cut times if a shot is wrong. Coloured bars show which seconds of each clip are used; red means a problem."),
+      actionButton("Find footage", () => runStep("footage"), canRun("footage"), "primary", reasonFor("footage"))];
+    out.push(h("div", { class: "legend" }, draft.map((v, vi) => h("span", {}, h("i", { class: `seg${vi % SEG_COLORS}` }), v.id))));
+    keys.forEach((k) => {
+      const meta = info[k];
+      const step = meta ? meta.sheet_step : 4;
+      const label = h("span", { class: "sheet-time", hidden: true });
+      const img = h("img", { class: "sheet", src: `/media/${encodeURIComponent(batchId)}/review/sheet_${encodeURIComponent(k)}.png`,
+        alt: "contact sheet " + k, onerror: (ev) => { ev.target.hidden = true; },
+        onmousemove: (ev) => {
+          const r = ev.target.getBoundingClientRect();
+          const col = Math.min(5, Math.floor(((ev.clientX - r.left) / r.width) * 6));
+          const row = Math.min(4, Math.floor(((ev.clientY - r.top) / r.height) * 5));
+          label.hidden = false;
+          label.textContent = `about ${(row * 6 + col) * step} s`;
+        },
+        onmouseleave: () => { label.hidden = true; } });
+      const host = h("div", {});
+      hosts[k] = host;
+      out.push(h("div", {}, h("div", { class: "muted" }, `${k}${meta ? ` - ${meta.duration.toFixed(0)} s long, one frame every ${step} s (hover the sheet for the time)` : ""}`),
+        h("div", { class: "sheet-wrap" }, img, label), host));
+    });
+    draft.forEach((v, vi) => {
       v.cuts = v.cuts || [];
-      const rows = v.cuts.map((c, i) => h("tr", {},
-        h("td", {}, h("select", { onchange: edit(c, "source") }, keys.map((k) => h("option", { value: k, selected: k === c.source }, k)))),
-        h("td", {}, h("input", { type: "number", step: "0.1", value: c.in, oninput: edit(c, "in", Number) })),
-        h("td", {}, h("input", { type: "number", step: "0.1", value: c.dur, oninput: edit(c, "dur", Number) })),
-        h("td", {}, actionButton("x", () => { v.cuts.splice(i, 1); dirty = true; renderPanel(true); }, true))));
+      const trs = v.cuts.map((c, ci) => {
+        const tr = h("tr", {},
+          h("td", {}, h("select", { onchange: edit(c, "source", null, refreshViz) }, keys.map((k) => h("option", { value: k, selected: k === c.source }, k)))),
+          h("td", {}, h("input", { type: "number", step: "0.1", value: c.in, oninput: edit(c, "in", Number, refreshViz) })),
+          h("td", {}, h("input", { type: "number", step: "0.1", value: c.dur, oninput: edit(c, "dur", Number, refreshViz) })),
+          h("td", {}, actionButton("x", () => { v.cuts.splice(ci, 1); dirty = true; renderPanel(true); }, true)));
+        rows[`${vi}:${ci}`] = tr;
+        return tr;
+      });
+      const total = v.cuts.reduce((a, c) => a + (Number(c.dur) || 0), 0);
+      const narration = estimateSeconds(v.narration).seconds;
       out.push(h("div", { class: "video" }, h("h4", {}, `${v.id}: ${v.topic || ""}`),
         v.redo_note ? h("div", { class: "muted" }, "Redo note: " + v.redo_note) : null,
-        h("table", { class: "cuts" }, h("tr", {}, h("th", {}, "Source"), h("th", {}, "Start (s)"), h("th", {}, "Length (s)"), h("th", {})), rows),
+        h("div", { class: "muted small" }, `${total.toFixed(1)} s of footage` + (narration ? `, narration about ${narration} s` : "")),
+        h("table", { class: "cuts" }, h("tr", {}, h("th", {}, "Source"), h("th", {}, "Start (s)"), h("th", {}, "Length (s)"), h("th", {})), trs),
         actionButton("Add cut", () => { if (keys.length) { v.cuts.push({ source: keys[0], in: 0, dur: 3 }); dirty = true; renderPanel(true); } }, keys.length > 0)));
     });
-    out.push(actionButton("Save cuts", () => saveVideos("visuals"), canRun("footage") && draft.length > 0 && dirty));
+    saveBtn = actionButton("Save cuts", () => saveVideos("visuals"), canRun("footage") && draft.length > 0 && dirty, "", dirty ? reasonFor("footage") : "Nothing to save yet.");
+    out.push(saveBtn);
+    setTimeout(refreshViz, 0);
     return out;
   }
 
+  /* ---- render, review, export */
   function renderPanelBody() {
+    const vids = data.spec.videos || [];
+    const made = vids.filter((v) => data.renders && data.renders[v.id]).length;
     const out = [h("h2", {}, "Voice and render"),
-      h("p", { class: "muted" }, "Narrates every video and renders 1080x1920 files. This takes a few minutes per video."),
-      actionButton("Make videos", () => runStep("render"), canRun("render"), "primary")];
-    (data.spec.videos || []).forEach((v) => out.push(h("div", {}, `${v.id}: ${v.topic || ""} - `,
+      h("p", { class: "muted" }, "Narrates every video and renders 1080x1920 files, only the ones that changed. This takes a few minutes per video."),
+      actionButton("Make videos", () => runStep("render"), canRun("render"), "primary", reasonFor("render")),
+      h("p", {}, h("span", { class: "progress" }, h("span", { style: `width:${vids.length ? (made / vids.length) * 100 : 0}%` })), `  ${made} of ${vids.length} videos rendered`)];
+    vids.forEach((v) => out.push(h("div", {}, `${v.id}: ${v.topic || ""} - `,
       h("strong", {}, data.renders && data.renders[v.id] ? "rendered" : "not rendered"))));
     if (data.steps.render === "stale") out.push(h("p", { class: "error" }, "Something changed after the last render. Make the videos again."));
     return out;
@@ -203,7 +404,8 @@ function initBatch() {
   function reviewPanel() {
     const out = [h("h2", {}, "Review"),
       h("p", { class: "muted" }, "Watch every video with sound. Redo any you do not like, then approve the batch."),
-      actionButton("Prepare review", () => runStep("review"), canRun("review") || (data.steps.render === "done" && !busy()), "primary")];
+      actionButton("Prepare review", () => runStep("review"), canRun("review") || (data.steps.render === "done" && !busy()), "primary",
+        reasonFor("review"))];
     (data.spec.videos || []).forEach((v) => {
       if (!(data.renders && data.renders[v.id])) return;
       const note = h("input", { placeholder: "What is wrong with it?" });
@@ -212,10 +414,12 @@ function initBatch() {
         h("video", { controls: true, preload: "metadata", src: `/media/${encodeURIComponent(batchId)}/renders/${encodeURIComponent(v.id)}.mp4?v=${data.renders_stamp || ""}` }),
         h("div", { class: "row" }, note, actionButton("Redo this video", () => {
           if (confirm(`Redo ${v.id}? Its cuts and render are cleared.`)) action(() => api("POST", `${base}/videos/${encodeURIComponent(v.id)}/redo`, { note: note.value || "redo" }));
-        }, !busy()))));
+        }, !busy(), "", reasonFor(null)))));
     });
+    const ready = !busy() && data.steps.render === "done" && data.gates.review_queue === "awaiting";
     out.push(h("div", { class: "gate-box" },
-      actionButton("Approve batch", () => approve("review_queue"), !busy() && data.steps.render === "done" && data.gates.review_queue === "awaiting", "gate"),
+      actionButton("Approve batch", () => approve("review_queue"), ready, "gate",
+        busy() ? reasonFor(null) : data.steps.render !== "done" ? "Make the videos first." : "Run Prepare review first."),
       h("span", { class: "muted" }, data.gates.review_queue === "approved" ? "Approved." : "Run Prepare review first. Your approval, not Claude's.")));
     return out;
   }
@@ -223,18 +427,38 @@ function initBatch() {
   function exportPanel() {
     return [h("h2", {}, "Export"),
       h("p", { class: "muted" }, "Writes each approved video with title, description and hashtag, private. Nothing is uploaded."),
-      actionButton("Export (private)", () => runStep("export"), canRun("export"), "primary"),
+      actionButton("Export (private)", () => runStep("export"), canRun("export"), "primary", reasonFor("export")),
       h("p", {}, "Folder: ", h("code", {}, `projects/${batchId}/export/`)),
       h("ul", { class: "list" }, (data.exports || []).map((e) => h("li", {}, e)))];
   }
 
   const PANELS = { topics: topicsPanel, script: scriptPanel, footage: footagePanel, render: renderPanelBody, review: reviewPanel, export: exportPanel };
 
+  /* ---- chrome: rail, next-step banner, title, log */
   function renderRail() {
-    const rail = $("rail");
-    rail.replaceChildren(...STEPS.map(([key, label]) => h("button", {
-      class: "step" + (key === selected ? " active" : ""), onclick: () => { selected = key; dirty = false; resetDraft(); renderPanel(true); renderRail(); } },
-      h("span", {}, label), h("span", { class: "badge " + data.steps[key] }, data.steps[key]))));
+    $("rail").replaceChildren(...STEPS.map(([key, label]) => h("button", {
+      class: "step" + (key === selected ? " active" : ""), onclick: () => select(key) },
+      h("span", {}, label),
+      h("span", { class: "badge " + data.steps[key] }, data.steps[key] === "running" ? h("span", { class: "spinner", style: "margin:0 4px 0 0" }) : null, data.steps[key]))));
+  }
+
+  function nextBanner() {
+    const n = data.next;
+    const box = $("next");
+    box.className = "next " + n.kind;
+    let text = n.text;
+    if (n.kind === "running" && data.running && data.running.step === "render") {
+      const vids = data.spec.videos || [];
+      text += ` (${vids.filter((v) => data.renders && data.renders[v.id]).length} of ${vids.length} videos rendered so far)`;
+    }
+    const parts = [h("div", {}, n.kind === "running" ? h("span", { class: "spinner" }) : null, h("strong", {}, text))];
+    if (n.step !== selected) parts.push(actionButton("Go to " + STEP_LABEL[n.step], () => select(n.step), true, "primary"));
+    box.replaceChildren(...parts);
+  }
+
+  function updateTitle() {
+    const k = data.next.kind;
+    document.title = (k === "running" ? "(working) " : k === "failed" ? "(failed) " : k === "done" ? "(done) " : "") + data.id + " - Studio";
   }
 
   function resetDraft() { draft = JSON.parse(JSON.stringify(data.spec.videos || [])); }
@@ -245,9 +469,21 @@ function initBatch() {
     $("panel").replaceChildren(...PANELS[selected]());
   }
 
+  function retryJob(job) {
+    const argv = job.argv || [];
+    const i = argv.indexOf("--approve");
+    if (i >= 0) approve(argv[i + 1]);
+    else runStep(job.step, lastParams[job.step]);
+  }
+
   async function renderLog() {
     const job = (data.jobs || [])[0];
-    $("job-status").textContent = job ? `${job.step} - ${job.status}` : "";
+    $("job-status").textContent = job ? `${STEP_LABEL[job.step] || job.step} - ${job.status}` : "";
+    const retry = $("job-retry");
+    retry.hidden = !(job && job.status === "failed" && !busy());
+    retry.textContent = job ? "Retry " + (STEP_LABEL[job.step] || job.step).toLowerCase() : "Retry";
+    retry.onclick = () => retryJob(job);
+    tickElapsed();
     if (!job) return;
     try {
       const res = await api("GET", `${base}/jobs/${encodeURIComponent(job.id)}/log?lines=80`);
@@ -257,19 +493,31 @@ function initBatch() {
     } catch (e) { /* log not written yet */ }
   }
 
+  function tickElapsed() {
+    $("job-elapsed").textContent = data && data.running ? `running for ${elapsed(data.running.started)}` : "";
+  }
+
+  function announceFinished() {
+    const job = (data.jobs || [])[0] || null;
+    if (prevJob && job && prevJob.id === job.id && prevJob.status === "running" && job.status !== "running") {
+      toast(`${STEP_LABEL[job.step] || job.step} ${job.status === "ok" ? "finished." : "failed - see the log."}`, job.status === "ok" ? "ok" : "bad");
+    }
+    prevJob = job ? { id: job.id, status: job.status } : null;
+  }
+
   async function refresh(force) {
     data = await api("GET", base);
     $("batch-title").textContent = data.id;
     $("batch-platform").textContent = data.platform;
-    if (!selected) {
-      const next = STEPS.find(([k]) => data.steps[k] !== "done");
-      selected = next ? next[0] : "export";
-    }
-    const signature = JSON.stringify([data.steps, data.gates, data.spec, data.running, (data.jobs || [])[0], data.renders, data.exports]);
+    if (!selected) selected = data.next.kind === "done" ? "export" : data.next.step;
+    announceFinished();
+    updateTitle();
+    const signature = JSON.stringify([data.steps, data.gates, data.spec, data.running, (data.jobs || [])[0], data.renders, data.exports, data.next]);
     if (force || signature !== lastSignature) {
       lastSignature = signature;
       if (!dirty) resetDraft();
       renderRail();
+      nextBanner();
       renderPanel(!!force && !dirty);
     }
     await renderLog();
@@ -278,6 +526,7 @@ function initBatch() {
   const events = new EventSource(`${base}/events`);
   events.onmessage = () => refresh(false).catch((e) => banner(e.message));
   setInterval(() => { if (data && data.running) refresh(false).catch(() => {}); }, 4000);
+  setInterval(() => { if (data) tickElapsed(); }, 1000);
   refresh(true).catch((e) => banner(e.message));
 }
 

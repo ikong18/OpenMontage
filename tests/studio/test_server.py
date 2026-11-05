@@ -168,3 +168,8 @@ def test_batch_view_has_next_action_limits_and_source_info(env, monkeypatch):
     assert data["next"]["step"] == "topics" and data["next"]["kind"] == "todo"
     assert data["limits"]["max_description"] == 2000 and data["limits"]["max_hashtags"] == 30
     assert data["source_info"]["s"]["duration"] == 60.0
+
+
+def test_pages_version_their_assets_so_browsers_never_serve_stale_scripts(env):
+    html = env.client.get("/").text
+    assert "/ui/studio.js?v=" in html and "/ui/studio.css?v=" in html

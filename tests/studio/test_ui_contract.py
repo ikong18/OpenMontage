@@ -49,3 +49,32 @@ def test_js_calls_every_api_route_the_server_has():
 def test_links_are_only_made_for_http_sources():
     js = _read("studio.js")
     assert "https?:" in js and "isHttp" in js
+
+
+# ---- UI improvements (guidance, feedback, editing helpers) ----------------------
+
+
+def test_guidance_and_feedback_features_present():
+    js, html = _read("studio.js"), _read("batch.html")
+    for needle in ("nextBanner", "toast(", "beforeunload", "Retry", "document.title", "reasonFor", "elapsed("):
+        assert needle in js, needle
+    assert 'aria-live="polite"' in html and 'id="toasts"' in html and 'id="next"' in html
+    assert 'id="banner-close"' in html and 'id="banner-retry"' in html
+
+
+def test_editing_helpers_present():
+    js = _read("studio.js")
+    for needle in ("estimateSeconds", "validateTopic", "usageBar", "cutProblems", "sheet_step", "max_description"):
+        assert needle in js, needle
+
+
+def test_home_page_shows_progress():
+    js = _read("studio.js")
+    for needle in ("steps_done", "current_step", "steps_total"):
+        assert needle in js, needle
+
+
+def test_css_has_spinner_toast_and_focus_styles():
+    css = _read("studio.css")
+    for needle in (".spinner", ".toast", ":focus-visible", ".seg", ".bad"):
+        assert needle in css, needle
