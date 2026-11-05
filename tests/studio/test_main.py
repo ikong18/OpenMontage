@@ -40,12 +40,18 @@ def test_build_app_uses_claude_cli_with_given_work_dir(tmp_path):
     assert app.state.projects_dir == tmp_path
 
 
-def test_default_work_dir_is_outside_the_repo_tree(monkeypatch, tmp_path):
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    work = cli.default_work_dir()
-    assert not work.resolve().is_relative_to(REPO.resolve())
-    monkeypatch.delenv("LOCALAPPDATA")
-    assert not cli.default_work_dir().resolve().is_relative_to(REPO.resolve())
+def test_default_work_dir_is_outside_the_repo_and_not_under_appdata(monkeypatch, tmp_path):
+    """The Microsoft Store build of Python silently redirects AppData writes into a private copy that other programs
+    (claude, codex) cannot see - they then report 'the current directory is invalid'. So never use AppData."""
+    for local in (str(tmp_path / "local"), None):
+        if local:
+            monkeypatch.setenv("LOCALAPPDATA", local)
+        else:
+            monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        work = cli.default_work_dir()
+        assert not work.resolve().is_relative_to(REPO.resolve())
+        assert "appdata" not in [part.lower() for part in work.parts]
+        assert work.parts[-1] == "studio-work"
 
 
 def test_readme_states_the_safety_rules():

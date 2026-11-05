@@ -49,9 +49,10 @@ def _spawn_server(port: int) -> None:
 
 
 def default_work_dir() -> Path:
-    """Where claude runs. Outside the repo tree: Claude Code also reads CLAUDE.md files in parent folders."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
-    return Path(base) / "OpenMontage" / "studio-work"
+    """Where claude/codex run. Outside the repo tree (Claude Code also reads CLAUDE.md files in parent folders) and NOT
+    under AppData: the Microsoft Store build of Python redirects AppData writes into a private copy that other programs
+    cannot see, and they then fail with 'the current directory is invalid'."""
+    return Path.home() / ".openmontage" / "studio-work"
 
 
 def build_app(projects_dir: Path = PROJECTS_DIR, work_dir: Path | None = None):

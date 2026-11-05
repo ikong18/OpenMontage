@@ -96,6 +96,16 @@ class AiError(Exception):
     """A failure the owner can read: the message says what went wrong."""
 
 
+def explain(raw: str) -> str:
+    """A plain-language hint for the failures we know the cause of."""
+    hints = []
+    if "another Claude Code session" in raw:
+        hints.append("start Studio from a normal terminal, not from inside a Claude Code session")
+    if "current directory is invalid" in raw.lower():
+        hints.append("the AI cannot open its work folder (~/.openmontage/studio-work); delete that folder and restart Studio")
+    return "".join(f" - {h}" for h in hints)
+
+
 class AiClient(Protocol):
     def run(self, task: str, inputs: dict[str, Any], schema: dict[str, Any], tools: list[str],
             add_dirs: list[Path] | None = None) -> dict[str, Any]: ...
@@ -131,10 +141,7 @@ class ClaudeCli:
         if proc.returncode != 0:
             raw = proc.stderr or proc.stdout or ""
             tail = " | ".join(raw.strip().splitlines()[-3:])
-            hint = ""
-            if "another Claude Code session" in raw:
-                hint = " - start Studio from a normal terminal, not from inside a Claude Code session"
-            raise AiError(f"claude failed (exit {proc.returncode}): {tail[:300]}{hint}")
+            raise AiError(f"claude failed (exit {proc.returncode}): {tail[:300]}{explain(raw)}")
         try:
             data = json.loads(proc.stdout)
         except ValueError as exc:
@@ -194,8 +201,9 @@ class CodexCli:
             proc = subprocess.run(argv, input=text, cwd=str(self.work_dir), capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=self.timeout)
             if proc.returncode != 0:
-                tail = " | ".join((proc.stderr or proc.stdout or "").strip().splitlines()[-3:])
-                raise AiError(f"codex failed (exit {proc.returncode}): {tail[:300]}")
+                raw = proc.stderr or proc.stdout or ""
+                tail = " | ".join(raw.strip().splitlines()[-3:])
+                raise AiError(f"codex failed (exit {proc.returncode}): {tail[:300]}{explain(raw)}")
             try:
                 answer = json.loads(out_path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:

@@ -216,3 +216,10 @@ def test_codex_runs_without_the_owners_mcp_servers(monkeypatch, tmp_path):
 def test_fact_check_task_is_defined():
     assert "fact_check" in SCHEMAS and TASK_TOOLS["fact_check"] == ["WebFetch", "WebSearch"]
     assert (ai_module.PROMPTS / "fact_check.md").read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.parametrize("client_cls,name", [(ClaudeCli, "claude"), (CodexCli, "codex")])
+def test_an_invalid_directory_error_explains_the_likely_cause(monkeypatch, tmp_path, client_cls, name):
+    _fake_run(monkeypatch, returncode=1, stderr="The current directory is invalid.")
+    with pytest.raises(AiError, match="work folder"):
+        client_cls(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
