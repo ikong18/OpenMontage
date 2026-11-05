@@ -85,3 +85,44 @@ def test_compose_director_sets_vertical_profile_and_caption_style():
     text = _read("compose-director")
     for needle in ("youtube_shorts", "captionStyle", "bottomOffset", "wordsPerPage"):
         assert needle in text
+
+
+# --- batch runner: directors call scripts/shorts_batch.py instead of improvising ---
+
+_COMMANDS = {
+    "idea-director": "validate",
+    "script-director": "validate",
+    "visuals-director": "fetch",
+    "voice-captions-director": "voice",
+    "compose-director": "render",
+    "review-queue-director": "checkpoints",
+    "publish-director": "export",
+}
+
+
+def test_directors_name_their_batch_command():
+    for skill, command in _COMMANDS.items():
+        text = _read(skill)
+        assert "scripts/shorts_batch.py" in text, skill
+        assert f"shorts_batch.py {command}" in text, f"{skill} should show `{command}`"
+
+
+def test_executive_producer_forbids_adhoc_scripts():
+    text = _read("executive-producer")
+    assert "ad-hoc" in text and "scripts/shorts_batch.py" in text
+
+
+def test_script_director_names_batch_spec_fields():
+    text = _read("script-director")
+    for needle in ("batch_spec.json", "cuts", "narration"):
+        assert needle in text
+
+
+def test_approve_flag_is_tied_to_owner_approval():
+    for skill in ("idea-director", "review-queue-director"):
+        text = _read(skill)
+        assert "--approve" in text and "owner" in text.lower()
+
+
+def test_index_lists_the_batch_runner():
+    assert "shorts_batch.py" in (SKILLS / "INDEX.md").read_text(encoding="utf-8")

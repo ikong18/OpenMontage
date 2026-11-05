@@ -47,3 +47,9 @@ Every factual statement in the script is a `claims` entry with at least one http
 - Burying the hook after a greeting.
 - Two facts in one Short.
 - Claims sourced only to an AI summary or a content farm.
+
+## Batch runner command
+
+Put each script into its video in `batch_spec.json`: `narration` (the full spoken text, hook first),
+`hook_text`, and `claims` (each with http(s) `sources`). `cuts`, `title`, `description` and `tags` come in the
+next stages. Run `python scripts/shorts_batch.py validate projects/<id>` and fix every violation before moving on.

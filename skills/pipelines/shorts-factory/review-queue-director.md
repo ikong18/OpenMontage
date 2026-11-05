@@ -40,3 +40,10 @@ Complete the stage with human approval only when every video is approved or reje
 
 - Showing the owner a batch with audit warnings.
 - Approving the batch while a redo is still pending.
+
+## Batch runner command
+
+Run `python scripts/shorts_batch.py checkpoints projects/<id>`. It runs the audit first and refuses to write
+anything if the audit fails; otherwise it writes the stage records and extracts review frames, leaving
+`review_queue` awaiting the owner. View the frames, present the batch, and only after the owner approves in chat
+run `python scripts/shorts_batch.py checkpoints projects/<id> --approve review_queue`.

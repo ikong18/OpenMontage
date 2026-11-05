@@ -43,3 +43,13 @@ For each video add a `clips` list to its entry in `artifacts/shorts_batch.json`:
 - A favorite clip showing up in three videos.
 - Footage with burned-in watermarks or text.
 - Landscape clips with the subject at the edge.
+
+## Batch runner command
+
+Download each chosen clip with
+`python scripts/shorts_batch.py fetch projects/<id> --source nasa --query "<query>" --clip-id <id> --key <name>`.
+It refuses files over `--max-mb` (default 400) and files of unknown size, and records the source URL and
+licence in the spec's `sources`. Then fill each video's `cuts` as `{"source": "<name>", "in": <seconds>,
+"dur": <seconds>}`; set the source's `mode` to `blurpad` for 4:3 or pillarboxed footage. Run
+`python scripts/shorts_batch.py validate projects/<id>`: it flags overlapping ranges on the same source, so no
+footage is reused across the batch.

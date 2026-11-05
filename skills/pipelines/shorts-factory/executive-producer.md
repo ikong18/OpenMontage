@@ -54,3 +54,11 @@ Retry a failing video up to 3 times (a different clip, a rewritten hook). If it 
 - Reusing a favorite clip across videos.
 - Five videos that all open with a question.
 - Letting a paid fallback slip in because a key was missing; fall back to keyless sources instead.
+
+## Batch runner
+
+All batch work goes through `scripts/shorts_batch.py` (commands: `validate`, `fetch`, `voice`, `render`,
+`checkpoints`, `export`) and one input file, `projects/<id>/artifacts/batch_spec.json`. Never write ad-hoc
+scripts to cut, narrate, render or export; if a step is missing from the runner, say so to the owner instead
+of improvising. The runner never completes a gated stage by itself: pass `--approve idea` or
+`--approve review_queue` only after the owner has said yes in chat.

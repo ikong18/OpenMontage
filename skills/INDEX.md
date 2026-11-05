@@ -212,6 +212,8 @@ Stage director skills teach the agent HOW to execute each pipeline stage. Each s
 | Review Queue Director | `pipelines/shorts-factory/review-queue-director.md` | `review_queue` | Audit script, batch review on Backlot |
 | Publish Director | `pipelines/shorts-factory/publish-director.md` | `publish` | Approved-only export with metadata |
 
+The Shorts Factory directors run their work through `scripts/shorts_batch.py` (`validate`, `fetch`, `voice`, `render`, `checkpoints`, `export`), driven by `projects/<id>/artifacts/batch_spec.json`.
+
 ### Podcast Repurpose Pipeline (`pipelines/podcast-repurpose/`) — v2.0
 
 | Skill | File | Stage | Key Capabilities |

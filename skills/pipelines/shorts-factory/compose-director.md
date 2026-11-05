@@ -40,3 +40,10 @@ If one video fails to render, retry it up to 3 times, then mark it `dropped` and
 
 - Rendering at 1920x1080 by default; always set the vertical size.
 - Narration running past 60 seconds after captions are added.
+
+## Batch runner command
+
+Run `python scripts/shorts_batch.py render projects/<id>` (or `--video v1`). It cuts each segment to
+1080x1920, refuses to start if the cuts are shorter than the narration, and calls `video_compose` with the
+vertical profile and `captionStyle` described above. Use the manual settings above only if you must call
+`video_compose` yourself.

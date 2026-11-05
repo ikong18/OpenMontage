@@ -42,3 +42,9 @@ Every `cost_usd` must be `0.0`. A missing value fails the audit.
 
 - Switching voices mid-batch.
 - Captions that drift from the audio; check one video's timing by eye before doing the rest.
+
+## Batch runner command
+
+Run `python scripts/shorts_batch.py voice projects/<id>` (or `--video v1`). It narrates with `piper_tts`,
+derives word timings from the audio's pauses, writes the caption files and records the zero-cost entries.
+Timings are estimates, so check caption sync by eye in the finished video.
