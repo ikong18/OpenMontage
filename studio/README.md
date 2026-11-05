@@ -44,3 +44,8 @@ Design: `docs/superpowers/specs/2026-11-05-studio-ui-design.md`.
 $env:STUDIO_REAL_AI = "claude,codex"; $env:OPENMONTAGE_ALLOW_NETWORK = "1"
 python -m pytest tests/real_ai -s -p no:cacheprovider
 ```
+
+## Exact captions and the voice
+
+- **Captions** are timed by a local speech-recognition model (faster-whisper "base", about 140 MB, downloaded on first use). It listens to the finished narration and says when each word was spoken; Studio maps that onto your script. If the model is missing or does not recognise the audio, it falls back to the older pause-based estimate and records which one was used (`timing` in `artifacts/shorts_batch.json`). Set `OPENMONTAGE_ALIGNER=estimate` to force the estimate.
+- **Voices**: Piper (the original) or Kokoro (newer, usually more natural, 28 English voices). Pick one in the batch header and press **Preview voice** to listen. Kokoro needs two files in `models/kokoro/` (`kokoro-v1.0.int8.onnx`, `voices-v1.0.bin` from the kokoro-onnx GitHub release `model-files-v1.0`) and `pip install kokoro-onnx soundfile`. Changing the voice makes the videos voice and render again. Both voices are free and offline.
