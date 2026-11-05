@@ -248,13 +248,13 @@ def _ready_idea(tmp_path, name="Chain"):
 def test_approving_topics_starts_the_script_step_by_itself(tmp_path):
     scripts = {"items": [{"id": "v1", "narration": "Words here.", "claims": [{"text": "c", "sources": ["https://example.com/a"]}],
                           "title": "T", "description": "D", "tags": ["a"]}]}
-    ai = FakeAi({"scripts": scripts})
+    ai = FakeAi({"scripts": scripts, "fact_check": {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "supported", "note": "n", "quote": "q"}], "narration_issues": []}]}})
     jobs, client = _env_with_ai(tmp_path, ai)
     bid = _ready_idea(tmp_path)
     assert client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H).status_code == 202
-    assert _poll(lambda: [r["step"] for r in jobs.recent(bid)].count("script") == 1 and not jobs.running(bid))
+    assert _poll(lambda: [r["step"] for r in jobs.recent(bid)].count("script") == 2 and not jobs.running(bid))
     steps = [r["step"] for r in reversed(jobs.recent(bid))]
-    assert steps == ["topics", "script"]
+    assert steps == ["topics", "script", "script"]  # approve, write, fact-check
     assert load_spec(tmp_path / bid)["videos"][0]["narration"] == "Words here."
     assert client.get(f"/api/batches/{bid}").json()["gates"]["review_queue"] == "none"
 
@@ -288,7 +288,7 @@ def test_autopilot_chains_through_review_prep_and_never_approves_or_exports(tmp_
     client.put(f"/api/batches/{bid}/settings", json={"autopilot": True}, headers=H)
     client.get(f"/api/batches/{bid}")
     client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H)
-    assert _poll(lambda: ran == ["script", "footage", "render", "review"] and not jobs.running(bid), timeout=90)
+    assert _poll(lambda: ran == ["script", "script", "footage", "render", "review"] and not jobs.running(bid), timeout=90)
     assert "export" not in ran
     argvs = [r["argv"] for r in jobs.recent(bid, 20)]
     assert sum(1 for a in argvs if "--approve" in a) == 1  # the owner's topic approval only
@@ -302,3 +302,55 @@ def test_research_job_records_which_topics_it_researches(tmp_path):
     client.post(f"/api/batches/{bid}/steps/topics/run", json={"research": ["v1", "v2"]}, headers=H)
     jobs.wait(bid)
     assert jobs.recent(bid)[0]["argv"] == ["<topics:research:v1,v2>"]
+
+
+# ---- fact check wiring (control flow only) ---------------------------------------------------------
+
+
+def _scripted(tmp_path, name="FCChain"):
+    bid = _ready_idea(tmp_path, name)
+    (tmp_path / bid / "checkpoint_idea.json").write_text(
+        json.dumps({"stage": "idea", "status": "completed", "human_approved": True, "timestamp": "2026-01-01T00:00:00+00:00"}),
+        encoding="utf-8")
+    spec = load_spec(tmp_path / bid)
+    spec["videos"][0].update({"narration": "Words here.", "title": "T", "description": "D", "tags": ["a"],
+                              "claims": [{"text": "c", "sources": ["https://example.com/a"]}]})
+    from lib.shorts.spec import save_spec
+    save_spec(tmp_path / bid, spec)
+    return bid
+
+
+def test_script_step_is_followed_by_a_fact_check_by_the_other_ai(tmp_path):
+    scripts = {"items": [{"id": "v1", "narration": "Words here.", "claims": [{"text": "c", "sources": ["https://example.com/a"]}],
+                          "title": "T", "description": "D", "tags": ["a"]}]}
+    check = {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "partly", "note": "n", "quote": "q"}], "narration_issues": []}]}
+    claude, codex = FakeAi({"scripts": scripts}), FakeAi({"fact_check": check})
+    jobs, client = _env_with_ai(tmp_path, claude, providers={"codex": codex})
+    bid = _ready_idea(tmp_path, "FCWho")
+    client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H)
+    assert _poll(lambda: [r["step"] for r in jobs.recent(bid)].count("script") == 2 and not jobs.running(bid))
+    assert [c["task"] for c in claude.calls] == ["scripts"] and [c["task"] for c in codex.calls] == ["fact_check"]
+    view = client.get(f"/api/batches/{bid}").json()
+    assert view["fact_check"]["checked"] is True and view["fact_check"]["checker"] == "codex"
+    assert view["fact_check"]["videos"]["v1"]["flagged"] == 1
+    assert "1 claim" in view["next"]["text"]
+
+
+def test_fact_check_by_the_same_ai_is_marked_as_such(tmp_path):
+    check = {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "supported", "note": "n", "quote": "q"}], "narration_issues": []}]}
+    ai = FakeAi({"fact_check": check})
+    jobs, client = _env_with_ai(tmp_path, ai)
+    bid = _scripted(tmp_path)
+    assert client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True}, headers=H).status_code == 202
+    jobs.wait(bid)
+    assert client.get(f"/api/batches/{bid}").json()["fact_check"]["same_ai"] is True
+
+
+def test_users_cannot_forge_who_wrote_or_checked(tmp_path):
+    check = {"items": [{"id": "v1", "claims": [{"index": 0, "verdict": "supported", "note": "n", "quote": "q"}], "narration_issues": []}]}
+    jobs, client = _env_with_ai(tmp_path, FakeAi({"fact_check": check}))
+    bid = _scripted(tmp_path, "Forge")
+    client.post(f"/api/batches/{bid}/steps/script/run", json={"factcheck": True, "writer": "me", "checker": "nobody"}, headers=H)
+    jobs.wait(bid)
+    record = client.get(f"/api/batches/{bid}").json()["fact_check"]
+    assert record["writer"] == "claude" and record["checker"] == "claude"

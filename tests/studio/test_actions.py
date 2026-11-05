@@ -488,3 +488,28 @@ def test_research_sends_the_owners_source_links_to_the_ai(batch):
     plan_for("topics", batch, ai, {"research": ["v1"]}, FakeCli(batch))(_ctx(batch))
     assert ai.calls[0]["inputs"]["videos"][0]["topic_sources"] == ["https://owner.example/page"]
     assert load_spec(batch)["videos"][0]["topic_sources"][0] == "https://owner.example/page"
+
+
+# ---- fact check step (control flow only; whether the AI judges correctly is tested in tests/real_ai) -------------
+
+
+def test_factcheck_saves_the_record_and_asks_for_web_tools(batch):
+    _with_topics(batch)
+    plan_for("script", batch, FakeAi({"scripts": _scripts(["v1", "v2"])}), {}, FakeCli(batch))(_ctx(batch))
+    checks = {"items": [{"id": i, "claims": [{"index": 0, "verdict": "supported", "note": "ok", "quote": "q"}],
+                         "narration_issues": []} for i in ("v1", "v2")]}
+    ai = FakeAi({"fact_check": checks})
+    plan_for("script", batch, ai, {"factcheck": True, "writer": "claude", "checker": "codex"}, FakeCli(batch))(_ctx(batch))
+    from studio.factcheck import load_check
+    record = load_check(batch)
+    assert record["writer"] == "claude" and record["checker"] == "codex" and set(record["videos"]) == {"v1", "v2"}
+    assert ai.calls[0]["task"] == "fact_check" and ai.calls[0]["tools"] == ["WebFetch", "WebSearch"]
+
+
+def test_factcheck_failure_leaves_the_scripts_untouched(batch):
+    _with_topics(batch)
+    plan_for("script", batch, FakeAi({"scripts": _scripts(["v1", "v2"])}), {}, FakeCli(batch))(_ctx(batch))
+    before = (batch / "artifacts" / "batch_spec.json").read_bytes()
+    with pytest.raises(AiError):
+        plan_for("script", batch, FakeAi({"fact_check": AiError("offline")}), {"factcheck": True}, FakeCli(batch))(_ctx(batch))
+    assert (batch / "artifacts" / "batch_spec.json").read_bytes() == before

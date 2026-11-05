@@ -67,12 +67,28 @@ SCHEMAS["topic_research"] = _wrap({
     "required": ["id", "topic", "hook_type", "hook_text", "sources"],
 })
 
+SCHEMAS["fact_check"] = _wrap({
+    "type": "object",
+    "properties": {
+        "id": _STR,
+        "claims": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"},
+                           "verdict": {"type": "string", "enum": ["supported", "partly", "unsupported", "unverifiable"]},
+                           "note": _STR, "quote": _STR},
+            "required": ["index", "verdict", "note", "quote"]}},
+        "narration_issues": _STRS,
+    },
+    "required": ["id", "claims", "narration_issues"],
+})
+
 TASK_TOOLS: dict[str, list[str]] = {
     "topics": ["WebFetch", "WebSearch"],
     "scripts": ["WebFetch"],
     "footage_queries": [],
     "footage_cuts": ["Read"],
     "topic_research": ["WebFetch", "WebSearch"],
+    "fact_check": ["WebFetch", "WebSearch"],
 }
 
 

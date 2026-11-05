@@ -91,3 +91,12 @@ tr.bad td { background: rgba(255,107,107,.1); }
 .settings { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; margin: -6px 0 16px; font-size: 13px; color: var(--muted); }
 .inline { flex-direction: row; align-items: center; gap: 8px; }
 .inline input[type="checkbox"] { width: 16px; height: 16px; }
+
+/* ---- fact check */
+.factbox { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.claim { font-size: 13px; }
+.verdict { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+.verdict.supported { color: var(--ok); border-color: var(--ok); }
+.verdict.partly { color: var(--warn); border-color: var(--warn); }
+.verdict.unsupported { color: var(--bad); border-color: var(--bad); }
+.verdict.unverifiable { color: var(--muted); border-color: var(--muted); }

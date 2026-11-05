@@ -19,6 +19,7 @@ from lib.shorts.batch import read_batch, render_fingerprint
 from lib.shorts.spec import load_spec, save_spec, validate_spec
 from studio.ai import SCHEMAS, TASK_TOOLS, AiClient
 from studio.apply import add_source, apply_cuts, apply_research, apply_scripts, apply_topics
+from studio.factcheck import apply_check, check_inputs, save_check
 from studio.jobs import JobContext
 from studio.steps import gate_status, step_states
 
@@ -100,7 +101,23 @@ def _topics(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Ca
     return body
 
 
+def _factcheck(project: Path, ai: AiClient, params: dict[str, Any]) -> Callable[[JobContext], None]:
+    def body(ctx: JobContext) -> None:
+        spec = load_spec(project)
+        who = f"{params.get('checker') or 'the AI'}" + (" (the same AI that wrote them)" if params.get("writer") == params.get("checker") else "")
+        ctx.log(f"asking {who} to open every cited page and check every claim ...")
+        result = ai.run("fact_check", check_inputs(spec.get("videos") or []), SCHEMAS["fact_check"], TASK_TOOLS["fact_check"])
+        record = apply_check(spec, result.get("items") or [], str(params.get("writer") or ""), str(params.get("checker") or ""))
+        save_check(project, record)
+        flagged = sum(1 for v in record["videos"].values() for c in v["claims"] if c["verdict"] != "supported")
+        ctx.log(f"fact check done: {flagged} claim(s) need a look")
+    return body
+
+
 def _script(project: Path, ai: AiClient, params: dict[str, Any], cli: Any) -> Callable[[JobContext], None]:
+    if params.get("factcheck"):
+        return _factcheck(project, ai, params)
+
     def body(ctx: JobContext) -> None:
         spec = load_spec(project)
         ctx.log("asking claude for scripts ...")

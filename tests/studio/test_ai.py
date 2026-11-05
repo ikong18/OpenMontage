@@ -211,3 +211,8 @@ def test_codex_runs_without_the_owners_mcp_servers(monkeypatch, tmp_path):
     CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
     argv = seen["argv"]
     assert argv[argv.index("-c") + 1] == "mcp_servers={}"
+
+
+def test_fact_check_task_is_defined():
+    assert "fact_check" in SCHEMAS and TASK_TOOLS["fact_check"] == ["WebFetch", "WebSearch"]
+    assert (ai_module.PROMPTS / "fact_check.md").read_text(encoding="utf-8").strip()

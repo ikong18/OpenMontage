@@ -140,7 +140,7 @@ STEP_LABELS = {"topics": "Topics", "script": "Script", "footage": "Footage",
 
 
 def next_action(states: dict[str, str], gates: dict[str, str], running: dict | None, video_count: int,
-                batch_id: str) -> dict[str, str]:
+                batch_id: str, flagged: int = 0) -> dict[str, str]:
     """One plain-language line telling the owner what to do next. kind: running | failed | todo | done."""
     if running:
         step = running.get("step") or "topics"
@@ -171,4 +171,6 @@ def next_action(states: dict[str, str], gates: dict[str, str], running: dict | N
                     review, "Next: prepare the review again, then approve the batch.")
     else:
         text = "Next: export the approved videos (private)."
+    if flagged and step not in ("topics", "script"):
+        text += f" The fact check flagged {flagged} claim{'s' if flagged != 1 else ''} - read {'them' if flagged != 1 else 'it'} in the Script step first."
     return {"kind": "todo", "step": step, "text": text}

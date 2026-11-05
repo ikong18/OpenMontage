@@ -300,6 +300,33 @@ function initBatch() {
     return { el, update };
   }
 
+  const VERDICT_LABEL = { supported: "supported", partly: "partly supported", unsupported: "NOT supported", unverifiable: "could not be checked" };
+
+  function factNote() {
+    const f = data.fact_check || {};
+    if (!f.checked) return "No fact check yet - it runs by itself after the scripts are written.";
+    const who = f.same_ai ? `${f.checker} (the same AI that wrote them - a different one would be a stronger check)` : f.checker;
+    return `Checked by ${who}. The AI reads the cited pages; you decide what to keep.`;
+  }
+
+  function claimRows(v) {
+    const f = ((data.fact_check || {}).videos || {})[v.id];
+    const rows = [h("div", { class: "muted small" }, "Claims and fact check:")];
+    if (f && f.stale) rows.push(h("div", { class: "counter warn" }, "The script changed after the last fact check - run it again."));
+    (v.claims || []).forEach((c, i) => {
+      const verdict = f && !f.stale ? (f.claims || []).find((x) => x.index === i) : null;
+      rows.push(h("div", { class: "claim" },
+        verdict ? h("span", { class: "verdict " + verdict.verdict }, VERDICT_LABEL[verdict.verdict] || verdict.verdict) : null,
+        " ", c.text, " - ",
+        (c.sources || []).map((s) => (isHttp(s) ? h("a", { href: s, target: "_blank", rel: "noopener" }, s) : h("span", {}, s))),
+        verdict && verdict.note ? h("div", { class: "muted small" }, verdict.note + (verdict.quote ? ` - "${verdict.quote}"` : "")) : null));
+    });
+    if (f && !f.stale && (f.issues || []).length) {
+      rows.push(h("div", { class: "counter warn" }, "The narration says things no claim covers: " + f.issues.join(" | ")));
+    }
+    return h("div", { class: "factbox" }, rows);
+  }
+
   function scriptPanel() {
     const limits = data.limits || { max_description: 2000, max_hashtags: 30 };
     const out = [h("h2", {}, "Scripts"),
@@ -325,9 +352,12 @@ function initBatch() {
         h("label", {}, "Description", h("textarea", { oninput: edit(v, "description", null, desc.update) }, v.description || "")), desc.el,
         h("label", {}, "Tags (comma separated)", h("input", { value: (v.tags || []).join(", "),
           oninput: edit(v, "tags", (s) => s.split(",").map((t) => t.trim()).filter(Boolean)) })),
-        h("div", { class: "muted" }, "Claims: ", (v.claims || []).map((c) =>
-          h("div", {}, c.text, " - ", (c.sources || []).map((s) => (isHttp(s) ? h("a", { href: s, target: "_blank", rel: "noopener" }, s) : h("span", {}, s))))))));
+        claimRows(v)));
     });
+    out.push(h("div", { class: "row" },
+      actionButton("Fact-check again", () => runStep("script", { factcheck: true }), canRun("script") && draft.length > 0 && !dirty, "",
+        dirty ? "Save your edits first." : reasonFor("script")),
+      h("span", { class: "muted small" }, factNote())));
     out.push(actionButton("Save edits", () => saveVideos("script"), canRun("script") && draft.length > 0 && dirty, "",
       dirty ? reasonFor("script") : "Nothing to save yet."));
     return out;

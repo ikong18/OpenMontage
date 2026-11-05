@@ -99,3 +99,9 @@ def test_ui_review_fixes_present():
         assert needle in js, needle
     settings_part = js.split("function renderSettings")[1].split("const saveVideos")[0]
     assert "disabled: busy()" not in settings_part
+
+
+def test_fact_check_is_shown_next_to_the_claims():
+    js = _read("studio.js")
+    for needle in ("fact_check", "Fact-check again", "factcheck", "verdict"):
+        assert needle in js, needle

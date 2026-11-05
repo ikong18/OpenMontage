@@ -22,6 +22,7 @@ from studio.ai import AiClient
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
 from studio.settings import PROVIDERS, load_settings, save_settings
+from studio.factcheck import check_view, pick_checker
 from studio.sources import source_info
 from studio.steps import STEPS, gate_status, next_action, step_states
 
@@ -84,8 +85,10 @@ def create_app(
 
     CHAIN = {"script": "footage", "footage": "render", "render": "review"}
 
-    def chain_after(batch_id: str, step: str, project: Path):
+    def chain_after(batch_id: str, step: str, project: Path, params: dict[str, Any] | None = None):
         """After a step succeeds and autopilot is on, start the next one (never approvals, never export)."""
+        if step == "script" and not (params or {}).get("factcheck"):
+            return lambda: start_step(batch_id, "script", {"factcheck": True})  # scripts are always fact-checked
         nxt = CHAIN.get(step)
         if nxt is None:
             return None
@@ -105,7 +108,15 @@ def create_app(
             raise StepError(422, f"step '{step}' is locked until the previous step is done")
         if step == "topics" and gate_status(project, "idea") == "approved":
             raise StepError(409, "topics are already approved; start a new batch")
+        params = dict(params or {})
+        for forged in ("writer", "checker"):
+            params.pop(forged, None)  # who wrote and who checked is decided here, never by the request
         client = ai_for(project)
+        if step == "script" and params.get("factcheck"):
+            writer = load_settings(project)["provider"]
+            checker, _same = pick_checker(writer, {name: provider_ready(name) for name in PROVIDERS})
+            client = clients.get(checker)
+            params.update({"writer": writer, "checker": checker})
         if step in AI_STEPS and client is None:
             raise StepError(503, "no AI client is configured for this server")
         try:
@@ -113,7 +124,7 @@ def create_app(
             if step == "topics" and params.get("research"):
                 label = "<topics:research:" + ",".join(str(i) for i in params["research"]) + ">"
             return jobs.run_steps(batch_id, step, plan_for(step, project, client, params),
-                                  on_success=chain_after(batch_id, step, project), label=label)
+                                  on_success=chain_after(batch_id, step, project, params), label=label)
         except JobBusy:
             raise StepError(409, "a job is already running for this batch") from None
 
@@ -139,6 +150,7 @@ def create_app(
         steps = step_states(project, running=(running or {}).get("step"), failed=failed)
         gates = {"idea": gate_status(project, "idea"), "review_queue": gate_status(project, "review_queue")}
         platform = get_platform(spec.get("platform"))
+        fact = check_view(project, spec)
         return {
             "id": batch_id,
             "platform": spec.get("platform") or "youtube_shorts",
@@ -147,7 +159,9 @@ def create_app(
             "gates": gates,
             "settings": load_settings(project),
             "providers": {name: provider_ready(name) for name in PROVIDERS},
-            "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id),
+            "fact_check": fact,
+            "next": next_action(steps, gates, running, len(spec.get("videos") or []), batch_id,
+                                flagged=sum(v.get("flagged", 0) for v in fact["videos"].values() if not v.get("stale"))),
             "limits": {"max_description": platform.max_description, "max_hashtags": platform.max_hashtags},
             "source_info": source_info(project, spec),
             "jobs": recent,
