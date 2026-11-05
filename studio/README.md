@@ -13,8 +13,8 @@ Start it from a normal terminal, not from inside a Claude Code session: the `cla
 
 ## The six steps
 
-1. **Topics** - Claude suggests topics with sources; you edit them and click **Approve topics**.
-2. **Script** - Claude writes narration, claims (each with a source) and posting text; you edit.
+1. **Topics** - Claude (or Codex) suggests topics, or you type your own and click **Research this topic**: the AI finds source pages, picks the hook type and writes the first sentence. You edit, then click **Approve topics**, which also starts the scripts by itself.
+2. **Script** - written automatically after you approve the topics: narration, claims (each with a source the AI opened) and posting text. You read and edit. Tick **Keep going automatically** to also run footage, voice and render, stopping before Review.
 3. **Footage** - clips are downloaded (size-capped), Claude proposes cuts from contact sheets; you can change any cut.
 4. **Voice and render** - narration and 1080x1920 renders (a few minutes per video).
 5. **Review** - watch each video, Redo any you do not like, then click **Approve batch**.
@@ -22,7 +22,7 @@ Start it from a normal terminal, not from inside a Claude Code session: the `cla
 
 ## What the AI can and cannot do
 
-The thinking steps run your own `claude -p` (your subscription, no API keys) in a separate work folder with a short
+The thinking steps run your own `claude -p` or `codex exec` (your subscriptions, no API keys; pick one per batch in the page header) in a separate work folder outside the repo, with a short
 tool allowlist (web pages for facts, file read for contact sheets). It returns JSON; Studio validates it and saves it.
 It cannot write files, run commands, or approve anything: only your two button clicks run the approve commands.
 
@@ -34,3 +34,12 @@ It cannot write files, run commands, or approve anything: only your two button c
 - Free only: the existing zero-cost, size-cap and licence checks apply unchanged.
 
 Design: `docs/superpowers/specs/2026-11-05-studio-ui-design.md`.
+
+## Real-AI tests
+
+`tests/real_ai` runs the real CLIs and the real web (minutes, uses your subscriptions). They are skipped normally. From a normal terminal:
+
+```bash
+$env:STUDIO_REAL_AI = "claude,codex"; $env:OPENMONTAGE_ALLOW_NETWORK = "1"
+python -m pytest tests/real_ai -s -p no:cacheprovider
+```

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -96,7 +97,7 @@ class ClaudeCli:
         text = f"{prompt}\n\nINPUT:\n{json.dumps(inputs, indent=2, ensure_ascii=False)}\n"
         # cwd must not be the repo root: its CLAUDE.md would redirect the run to the production guide.
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        argv = [self.binary, "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+        argv = [shutil.which(self.binary) or self.binary, "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
                 "--no-session-persistence", "--strict-mcp-config", "--tools", ",".join(tools)]
         if tools:
             argv += ["--allowedTools", ",".join(tools)]
@@ -167,7 +168,7 @@ class CodexCli:
         schema_path = self.work_dir / f"schema_{run_id}.json"
         out_path = self.work_dir / f"answer_{run_id}.json"
         schema_path.write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
-        argv = [self.binary, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
+        argv = [shutil.which(self.binary) or self.binary, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
                 "-C", str(self.work_dir), "--output-schema", str(schema_path), "-o", str(out_path)]
         for source in inputs.get("sources") or []:
             if isinstance(source, dict) and source.get("sheet"):

@@ -33,7 +33,7 @@ def test_command_line_has_required_flags(monkeypatch, tmp_path):
     work = tmp_path / "work"
     ClaudeCli(work).run("topics", {"theme": "space"}, SCHEMAS["topics"], ["WebFetch", "WebSearch"])
     argv = seen["argv"]
-    assert argv[0] == "claude" and "-p" in argv
+    assert Path(argv[0]).stem.lower() == "claude" and "-p" in argv
     assert argv[argv.index("--output-format") + 1] == "json"
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMAS["topics"]
     assert "--no-session-persistence" in argv
@@ -159,7 +159,8 @@ def test_codex_command_line(monkeypatch, tmp_path):
     out = CodexCli(work).run("footage_cuts", {"sources": [{"key": "a", "sheet": str(sheet)}]}, SCHEMAS["footage_cuts"], ["Read"])
     argv = seen["argv"]
     assert out == {"items": [{"a": 1}]}
-    assert argv[:2] == ["codex", "exec"] and "--ephemeral" in argv and "--skip-git-repo-check" in argv
+    assert Path(argv[0]).stem.lower() == "codex" and argv[1] == "exec"
+    assert "--ephemeral" in argv and "--skip-git-repo-check" in argv
     assert argv[argv.index("-s") + 1] == "read-only"
     assert Path(argv[argv.index("-C") + 1]) == work
     assert argv[argv.index("-i") + 1] == str(sheet) and argv[-1] == "-"
@@ -178,3 +179,21 @@ def test_codex_errors_are_readable(monkeypatch, tmp_path):
     monkeypatch.setattr(ai_module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
     with pytest.raises(AiError, match="no answer"):
         CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+
+
+def test_cli_binaries_are_resolved_through_path_so_cmd_shims_work_on_windows(monkeypatch, tmp_path):
+    """npm installs codex/claude as .cmd shims; a bare name cannot be launched without the full path."""
+    monkeypatch.setattr(ai_module.shutil, "which", lambda name: rf"C:\npm\{name}.CMD")
+    seen = []
+
+    def fake(argv, **kwargs):
+        seen.append(argv[0])
+        out = [a for a in argv if str(a).endswith(".json") and "answer_" in str(a)]
+        if out:
+            Path(out[0]).write_text(json.dumps({"items": []}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout=_ok({"items": []}), stderr="")
+
+    monkeypatch.setattr(ai_module.subprocess, "run", fake)
+    ClaudeCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    CodexCli(tmp_path).run("topics", {}, SCHEMAS["topics"], [])
+    assert seen == [r"C:\npm\claude.CMD", r"C:\npm\codex.CMD"]
