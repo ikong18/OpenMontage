@@ -9,7 +9,7 @@ from starlette.testclient import TestClient
 from lib.shorts.spec import load_spec
 from studio.jobs import JobRunner
 from studio.server import create_app
-from tests.real_ai.conftest import page_text
+from tests.real_ai.conftest import assert_sources_are_real
 
 pytestmark = pytest.mark.live_api  # real, billable AI calls: needs OPENMONTAGE_ALLOW_NETWORK=1
 
@@ -43,7 +43,8 @@ def test_approving_a_typed_topic_writes_the_scripts_by_itself(ai, provider, tmp_
     assert _wait_idle(jobs, bid), "research did not finish"
     researched = load_spec(tmp_path / bid)["videos"][0]
     print(f"\n[{provider}] researched: {researched['hook_type']!r} {researched['hook_text']!r} {researched['topic_sources']}")
-    assert researched["topic_sources"] and all(len(page_text(u)) > 500 for u in researched["topic_sources"])
+    assert researched["topic_sources"]
+    assert_sources_are_real(researched["topic_sources"])
 
     # approve: the script step must start by itself, and nothing else may be approved
     assert client.post(f"/api/batches/{bid}/gates/idea/approve", headers=H).status_code == 202

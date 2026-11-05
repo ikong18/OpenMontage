@@ -39,15 +39,29 @@ def ai(provider, tmp_path):
     return (ClaudeCli(work, timeout=900) if provider == "claude" else CodexCli(work, timeout=900))
 
 
-def page_text(url: str) -> str:
-    """The visible text of a page, for checking that a cited source really says what the claim says."""
+def page_status(url: str) -> tuple[int, str]:
+    """(HTTP status, visible text). Status 0 = could not connect. Some sites answer scripts with 403/429 though the page exists."""
     import requests
 
-    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (OpenMontage real-AI test)"}, timeout=45)
-    resp.raise_for_status()
-    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", resp.text)
+    try:
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (OpenMontage real-AI test)"}, timeout=45)
+    except requests.RequestException:
+        return 0, ""
+    text = re.sub(r"(?is)<(script|style).*?</>", " ", resp.text)
     text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text)
+    return resp.status_code, re.sub(r"\s+", " ", text)
+
+
+def assert_sources_are_real(urls: list[str]) -> list[str]:
+    """Every cited page must exist (200, or 403/429 = exists but blocks scripts); at least one must be readable here."""
+    readable = []
+    for url in urls:
+        status, text = page_status(url)
+        assert status == 200 or status in (401, 403, 429), f"{url} answered {status}: not a real page"
+        if status == 200 and len(text) > 500:
+            readable.append(url)
+    assert readable, f"none of {urls} could be read to check it"
+    return readable
 
 
 def numbers_in(text: str) -> set[str]:

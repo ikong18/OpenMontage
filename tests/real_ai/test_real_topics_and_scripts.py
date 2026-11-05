@@ -11,7 +11,7 @@ from studio.actions import plan_for
 from studio.batches import create_batch
 from studio.jobs import JobContext
 from studio.apply import apply_research
-from tests.real_ai.conftest import numbers_in, page_text
+from tests.real_ai.conftest import assert_sources_are_real, numbers_in, page_status
 
 pytestmark = pytest.mark.live_api  # real, billable AI calls: needs OPENMONTAGE_ALLOW_NETWORK=1
 
@@ -49,8 +49,7 @@ def test_research_finds_sources_that_really_load(ai, provider, tmp_path):
     print(f"\n[{provider}] research took {seconds:.0f}s -> {json.dumps(video, indent=1)}")
     assert video["hook_type"] in HOOKS and video["hook_text"].strip()
     assert 1 <= len(video["topic_sources"]) <= 3
-    for url in video["topic_sources"]:
-        assert len(page_text(url)) > 500, f"{url} did not load as a real page"
+    assert_sources_are_real(video["topic_sources"])
     assert not validate_spec(load_spec(project), project, "idea")
 
 
@@ -75,9 +74,14 @@ def test_scripts_fit_the_video_and_cite_pages_that_say_it(ai, provider, tmp_path
     # every cited source must load; claims with figures must find one of those figures on a cited page
     verified, with_numbers, report = 0, 0, []
     for claim in video["claims"]:
-        pages = {url: page_text(url) for url in claim["sources"]}
+        pages = {}
+        for url in claim["sources"]:
+            status, text = page_status(url)
+            assert status == 200 or status in (401, 403, 429), f"{url} answered {status}: not a real page"
+            if status == 200:
+                pages[url] = text
         figures = numbers_in(claim["text"])
-        if figures:
+        if figures and pages:
             with_numbers += 1
             hit = any(figures & numbers_in(text) for text in pages.values())
             verified += 1 if hit else 0
@@ -85,4 +89,5 @@ def test_scripts_fit_the_video_and_cite_pages_that_say_it(ai, provider, tmp_path
     print(f"[{provider}] claims with figures verified on their cited pages: {verified}/{with_numbers}")
     for line in report:
         print("   ", line)
-    assert with_numbers == 0 or verified / with_numbers >= 0.6, report
+    assert with_numbers >= 1, "no claim with a figure could be checked against a readable page"
+    assert verified / with_numbers >= 0.6, report
