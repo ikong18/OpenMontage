@@ -9,12 +9,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from lib.shorts.spec import STAGES, load_spec
+from studio.actions import AI_STEPS, REPO, approval_argv, plan_for, redo_video
 from studio.ai import AiClient
 from studio.batches import batch_dir, create_batch, edit_videos, list_batches
 from studio.jobs import JobBusy, JobRunner
@@ -165,6 +166,48 @@ def create_app(
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/api/batches/{batch_id}/steps/{step}/run", status_code=202, dependencies=[Depends(require_token)])
+    async def run_step(batch_id: str, step: str, body: dict = Body(default_factory=dict)) -> dict:
+        project = project_or_404(batch_id)
+        if step not in STEPS:
+            raise HTTPException(status_code=404, detail=f"unknown step '{step}'")
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is already running for this batch")
+        if step_states(project)[step] == "locked":
+            raise HTTPException(status_code=422, detail=f"step '{step}' is locked until the previous step is done")
+        if step == "topics" and gate_status(project, "idea") == "approved":
+            raise HTTPException(status_code=409, detail="topics are already approved; start a new batch")
+        if step in AI_STEPS and ai is None:
+            raise HTTPException(status_code=503, detail="no AI client is configured for this server")
+        try:
+            job_id = jobs.run_steps(batch_id, step, plan_for(step, project, ai, body))
+        except JobBusy:
+            raise HTTPException(status_code=409, detail="a job is already running for this batch") from None
+        return {"job": job_id}
+
+    @app.post("/api/batches/{batch_id}/gates/{gate}/approve", status_code=202, dependencies=[Depends(require_token)])
+    async def approve(batch_id: str, gate: str) -> dict:
+        project = project_or_404(batch_id)
+        try:
+            argv = await asyncio.to_thread(approval_argv, project, gate)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        try:
+            job_id = jobs.start(batch_id, "topics" if gate == "idea" else "review", argv, cwd=REPO)
+        except JobBusy:
+            raise HTTPException(status_code=409, detail="a job is already running for this batch") from None
+        return {"job": job_id}
+
+    @app.post("/api/batches/{batch_id}/videos/{video_id}/redo", dependencies=[Depends(require_token)])
+    async def redo(batch_id: str, video_id: str, body: dict = Body(default_factory=dict)) -> dict:
+        project = project_or_404(batch_id)
+        if not any(v.get("id") == video_id for v in load_spec(project).get("videos") or []):
+            raise HTTPException(status_code=404, detail=f"no such video '{video_id}'")
+        if jobs.running(batch_id):
+            raise HTTPException(status_code=409, detail="a job is running; wait for it to finish")
+        await asyncio.to_thread(redo_video, project, video_id, str(body.get("note") or "redo"))
+        return {"ok": True}
 
     @app.get("/media/{batch_id}/{path:path}")
     async def media(batch_id: str, path: str):
