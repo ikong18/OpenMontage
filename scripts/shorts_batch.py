@@ -22,7 +22,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.shorts.align import SilenceAligner, detect_speech_spans, split_sentences, to_remotion_captions  # noqa: E402
+from lib.shorts.align import detect_speech_spans, split_sentences, to_remotion_captions  # noqa: E402
+from lib.shorts.whisper_align import make_aligner  # noqa: E402
 from lib.shorts.batch import (  # noqa: E402
     derive_batch, read_batch, record_cost, render_fingerprint, voice_fingerprint, write_batch,
 )
@@ -195,7 +196,9 @@ def cmd_voice(args: argparse.Namespace) -> int:
                               "length_scale": voice.get("length_scale", 0.95)})
         if not result.success:
             raise RuntimeError(f"{video['id']}: piper failed: {_first_line(result.error or '')}")
-        timings = SilenceAligner().align(video["narration"], wav)
+        aligner = make_aligner()
+        timings = aligner.align(video["narration"], wav)
+        timing_method = getattr(aligner, "method", "estimate")
         _, duration = detect_speech_spans(wav)
         captions = audio_dir / f"{video['id']}.captions.json"
         captions.write_text(json.dumps(to_remotion_captions(timings)), encoding="utf-8")
@@ -217,12 +220,13 @@ def cmd_voice(args: argparse.Namespace) -> int:
         entry["audio"] = f"assets/audio/{video['id']}.wav"
         entry["captions"] = f"assets/audio/{video['id']}.captions.json"
         entry["audio_duration"] = round(duration, 2)
+        entry["timing"] = timing_method
         entry["voice_hash"] = voice_fingerprint(spec, video)
         entry.pop("render_hash", None)  # the old render used the old audio
         record_cost(batch, video["id"], "piper_tts", "piper", 0.0)
         record_cost(batch, video["id"], "subtitle_gen", "openmontage", 0.0)
         write_batch(project, batch)
-        print(f"voiced {video['id']}: {duration:.1f}s, {len(timings)} words")
+        print(f"voiced {video['id']}: {duration:.1f}s, {len(timings)} words (timing: {timing_method})")
     return 0
 
 
